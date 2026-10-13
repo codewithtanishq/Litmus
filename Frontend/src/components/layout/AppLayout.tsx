@@ -1,5 +1,6 @@
-import { NavLink, useLocation, useNavigate } from 'react-router-dom';
+import { useState, useEffect } from 'react';
 import type { ReactNode } from 'react';
+import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { 
   Home, 
   RotateCcw, 
@@ -10,6 +11,7 @@ import {
   Square, 
   X 
 } from 'lucide-react';
+import { debugService } from '../../services/debugService';
 import './AppLayout.css';
 
 interface AppLayoutProps {
@@ -19,6 +21,23 @@ interface AppLayoutProps {
 export const AppLayout = ({ children }: AppLayoutProps) => {
   const location = useLocation();
   const navigate = useNavigate();
+  const [backendOnline, setBackendOnline] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    const verifyHealth = async () => {
+      const health = await debugService.checkHealth();
+      if (mounted) {
+        setBackendOnline(health?.status === 'healthy');
+      }
+    };
+    verifyHealth();
+    const interval = setInterval(verifyHealth, 10000);
+    return () => {
+      mounted = false;
+      clearInterval(interval);
+    };
+  }, []);
 
   const isHome = location.pathname === '/';
   const isBattle = location.pathname === '/battle';
@@ -44,6 +63,15 @@ export const AppLayout = ({ children }: AppLayoutProps) => {
             <circle cx="12" cy="12" r="3" />
           </svg>
           <span className="litmus-topbar__title">Litmus</span>
+          {backendOnline !== null && (
+            <span 
+              className={`litmus-backend-badge ${backendOnline ? 'litmus-backend-badge--online' : 'litmus-backend-badge--offline'}`}
+              title={backendOnline ? 'Backend API connected (Port 8001, SQLite ledger active)' : 'Operating in Standalone / Mock fallback mode'}
+            >
+              <span className="litmus-backend-badge__dot" />
+              {backendOnline ? 'Backend: Online (8001)' : 'Backend: Standalone'}
+            </span>
+          )}
         </div>
 
         {/* Window controls on far right */}
