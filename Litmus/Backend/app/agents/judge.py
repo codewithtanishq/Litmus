@@ -58,11 +58,13 @@ class JudgeAgent:
     def __init__(
         self,
         ollama_settings: Optional[OllamaSettings] = None,
-        ollama_client: Optional[OllamaClient] = None,
+        ollama_client: Optional[Any] = None,
         event_publisher: Optional[BaseEventPublisher] = None,
     ) -> None:
+        from app.agents.hybrid_client import HybridLLMClient
+
         self.settings = ollama_settings or get_settings().ollama
-        self.client = ollama_client or OllamaClient(settings=self.settings)
+        self.client = ollama_client or HybridLLMClient(ollama_settings=self.settings)
         self.publisher = event_publisher or get_event_publisher()
 
     def _format_test_result_summary(self, result: Any, label: str) -> str:
