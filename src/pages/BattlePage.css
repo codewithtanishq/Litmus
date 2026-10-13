@@ -1,0 +1,571 @@
+/* ==========================================================================
+   LITMUS Battle Arena Styles
+   Dark, premium, minimal chess aesthetic with Sage/Olive Green & Cream palette
+   ========================================================================== */
+
+.litmus-battle-page {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 84px); /* Full height within AppLayout viewport */
+  max-height: calc(100vh - 84px);
+  padding: 16px 22px;
+  gap: 12px;
+  background-color: var(--color-bg);
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+/* Empty State */
+.litmus-battle-page--empty {
+  align-items: center;
+  justify-content: center;
+}
+
+.battle-empty-card {
+  background-color: #ffffff;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: 36px 40px;
+  max-width: 520px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+}
+
+.battle-empty-card__header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.battle-empty-card__icon {
+  color: #b72837;
+}
+
+.battle-empty-card__desc {
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--color-text-secondary);
+  margin: 0;
+}
+
+.battle-empty-btn--primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background-color: #234528;
+  color: #ffffff;
+  font-weight: 700;
+  padding: 10px 20px;
+  border-radius: var(--radius-sm);
+  transition: all var(--transition-fast);
+}
+
+.battle-empty-btn--primary:hover {
+  background-color: #1b3720;
+}
+
+/* Top Strip */
+.litmus-battle-topstrip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 6px;
+  flex-shrink: 0;
+}
+
+.battle-topstrip-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+}
+
+.battle-back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #385d34;
+  font-weight: 700;
+  transition: color var(--transition-fast);
+}
+
+.battle-back-link:hover {
+  color: #172c1b;
+}
+
+.battle-topstrip-divider {
+  color: #a4baa1;
+}
+
+.battle-topstrip-title {
+  color: #172c1b;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 540px;
+}
+
+/* Terminal Inconclusive / Error Banner */
+.litmus-terminal-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 18px;
+  border-radius: var(--radius-md);
+  flex-shrink: 0;
+  gap: 16px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+}
+
+.litmus-terminal-banner--unresolved {
+  background-color: #fff1f2;
+  border: 1.5px solid #f43f5e;
+  color: #881337;
+}
+
+.litmus-terminal-banner--execution_inconclusive {
+  background-color: #fffbeb;
+  border: 1.5px solid #f59e0b;
+  color: #78350f;
+}
+
+.litmus-terminal-banner--error {
+  background-color: #fef2f2;
+  border: 1.5px solid #ef4444;
+  color: #7f1d1d;
+}
+
+.terminal-banner__left {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.terminal-banner__icon {
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+
+.terminal-banner__title {
+  font-size: 15px;
+  font-weight: 800;
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+
+.terminal-banner__desc {
+  font-size: 13.5px;
+  line-height: 1.45;
+  margin: 4px 0 0;
+  opacity: 0.95;
+}
+
+.terminal-banner__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.terminal-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 7px 14px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.terminal-btn--retry {
+  background-color: #234528;
+  color: #ffffff;
+  border: 1px solid #1b3720;
+}
+
+.terminal-btn--retry:hover {
+  background-color: #172c1b;
+}
+
+.terminal-btn--home {
+  background-color: #ffffff;
+  color: #172c1b;
+  border: 1px solid #c2caa8;
+}
+
+.terminal-btn--home:hover {
+  background-color: #f4f6ed;
+}
+
+/* ==========================================================================
+   Two Panels Layout
+   ========================================================================== */
+
+.litmus-arena-layout {
+  display: flex;
+  gap: 18px;
+  flex: 1;
+  min-height: 0; /* Ensures inner flex items scroll internally */
+  overflow: hidden;
+}
+
+/* Left Panel: Fixed Width on Desktop, Charcoal */
+.litmus-arena-panel--left {
+  width: 410px;
+  min-width: 380px;
+  max-width: 430px;
+  flex-shrink: 0;
+}
+
+/* Right Panel: Fills Remaining Width */
+.litmus-arena-panel--right {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Badges */
+.litmus-mode-badge {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  background-color: rgba(102, 133, 81, 0.25);
+  color: #a4d29b;
+  border: 1px solid rgba(102, 133, 81, 0.4);
+  padding: 2px 7px;
+  border-radius: 4px;
+}
+
+.litmus-arena-badge {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  background-color: #234528;
+  color: #ece8d8;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+/* Left Panel Body Details */
+.litmus-query-panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px !important;
+}
+
+.query-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.query-section-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.query-section-heading {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #8db587;
+  margin: 0;
+}
+
+.query-lang-tag {
+  font-size: 11px;
+  font-weight: 700;
+  color: #a3c29e;
+  font-family: var(--font-mono);
+}
+
+.query-question-box {
+  background-color: #19211b;
+  border: 1px solid #2e3d30;
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+}
+
+.query-question-text {
+  font-size: 14.5px;
+  line-height: 1.5;
+  color: #e4ebe0;
+  margin: 0;
+  font-weight: 500;
+}
+
+/* Collapsible sections */
+.query-collapsible-section {
+  border: 1px solid #28392b;
+  border-radius: var(--radius-sm);
+  background-color: #161e18;
+  overflow: hidden;
+}
+
+.query-collapsible-trigger {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 12px;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: #c2d6be;
+  background-color: #1a241d;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  transition: background-color var(--transition-fast);
+}
+
+.query-collapsible-trigger:hover {
+  background-color: #212e25;
+  color: #ffffff;
+}
+
+.query-collapsible-content {
+  padding: 10px 12px;
+  background-color: #121714;
+  border-top: 1px solid #253327;
+}
+
+.query-plain-box {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: #d1ded0;
+}
+
+.query-terminal-box {
+  margin: 0;
+  background-color: #0e120f;
+  padding: 10px 12px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: #ff9fa8;
+  white-space: pre-wrap;
+  word-break: break-all;
+  border: 1px solid #3c1e22;
+}
+
+/* File / Repo cards */
+.query-file-card,
+.query-repo-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background-color: #18221a;
+  border: 1px solid #2e4030;
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+}
+
+.query-file-icon,
+.query-repo-icon {
+  color: #668551;
+}
+
+.query-file-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.query-file-name {
+  color: #f4f8ec;
+  font-size: 14px;
+}
+
+.query-file-size {
+  color: #7b947e;
+  font-size: 12px;
+}
+
+.query-repo-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #86efac;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  word-break: break-all;
+}
+
+.query-repo-status {
+  margin-top: 10px;
+  padding: 10px;
+  background-color: #1a221b;
+  border-radius: var(--radius-sm);
+}
+
+.query-repo-not-retrieved {
+  display: block;
+  font-size: 13px;
+  font-weight: 700;
+  color: #eab308;
+}
+
+.query-repo-hint {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: #9ab399;
+}
+
+/* ==========================================================================
+   Right Panel Body Details
+   ========================================================================== */
+
+.litmus-judge-panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 20px !important;
+}
+
+/* Tabs: Debate, Sandboxes, Rounds */
+.litmus-arena-tabs-container {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.litmus-arena-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-bottom: 2px solid var(--color-border);
+  padding-bottom: 2px;
+}
+
+.litmus-arena-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 18px;
+  font-size: 15px; /* Big bold readable tab */
+  font-weight: 700;
+  color: var(--color-text-secondary);
+  border: none;
+  background: none;
+  cursor: pointer;
+  position: relative;
+  transition: all var(--transition-fast);
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+}
+
+.litmus-arena-tab:hover {
+  color: var(--color-text-primary);
+  background-color: rgba(35, 69, 40, 0.05);
+}
+
+.litmus-arena-tab--active {
+  color: var(--color-text-primary);
+  font-weight: 800;
+}
+
+.litmus-arena-tab--active::after {
+  content: '';
+  position: absolute;
+  bottom: -2px;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background-color: var(--color-brand-primary);
+  border-radius: 2px 2px 0 0;
+}
+
+.arena-tab-badge {
+  font-size: 11px;
+  font-weight: 800;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background-color: #dbe3cf;
+  color: #234528;
+}
+
+.arena-tab-badge--active {
+  background-color: #e2ebd8;
+  color: #172c1b;
+}
+
+.arena-tab-badge--running {
+  background-color: var(--status-running-bg);
+  color: var(--status-running-text);
+}
+
+/* Tab Panels */
+.litmus-tab-pane {
+  display: flex;
+  flex-direction: column;
+}
+
+.sandboxes-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* Placeholders for awaiting roles */
+.role-card-placeholder {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 20px;
+  background-color: #fbf9f2;
+  border: 1.5px dashed #c8d3bf;
+  border-radius: var(--radius-md);
+  margin-bottom: 14px;
+  color: var(--color-text-secondary);
+  font-size: 14.5px;
+  font-weight: 500;
+}
+
+.role-placeholder-icon {
+  color: #668551;
+  animation: litmusSpin 3s linear infinite;
+}
+
+/* ==========================================================================
+   Responsive Mobile & Tablet Stacking
+   ========================================================================== */
+
+@media (max-width: 960px) {
+  .litmus-battle-page {
+    height: auto;
+    max-height: none;
+    overflow-y: auto;
+  }
+
+  .litmus-arena-layout {
+    flex-direction: column;
+    overflow: visible;
+  }
+
+  .litmus-arena-panel--left {
+    width: 100%;
+    min-width: 100%;
+    max-width: none;
+    height: 480px;
+  }
+
+  .litmus-arena-panel--right {
+    width: 100%;
+    min-height: 600px;
+  }
+
+  .litmus-terminal-banner {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}

@@ -1,0 +1,221 @@
+.litmus-composer-wrapper {
+  width: 100%;
+  max-width: 880px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin: 0 auto;
+}
+
+.litmus-composer {
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-composer);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.litmus-composer:focus-within {
+  border-color: var(--color-border-strong);
+  box-shadow: 0 12px 36px rgba(30, 55, 30, 0.1), 0 0 0 1px var(--color-border-strong);
+}
+
+/* Header & Tabs */
+.litmus-composer__header {
+  padding: 16px 20px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--color-border-subtle);
+  background-color: #f7f9f0;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.litmus-composer__header-left {
+  display: flex;
+  align-items: center;
+}
+
+.composer-mode-tabs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background-color: var(--color-surface-code);
+  padding: 4px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+}
+
+.composer-mode-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-radius: var(--radius-sm);
+  font-size: 15px; /* Big readable font */
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  transition: all var(--transition-fast);
+}
+
+.composer-mode-tab:hover {
+  color: var(--color-text-primary);
+  background-color: #ffffff;
+}
+
+.composer-mode-tab--active {
+  color: #ffffff;
+  background-color: var(--color-brand-primary);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+}
+
+/* Locked mode header */
+.composer-mode-locked {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.composer-mode-locked__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px; /* Increased font size */
+  font-weight: 600;
+  color: var(--color-brand-primary);
+  background-color: var(--color-brand-light);
+  border: 1px solid var(--color-border);
+  padding: 8px 16px;
+  border-radius: var(--radius-sm);
+}
+
+.composer-mode-locked__icon {
+  color: var(--color-brand-primary);
+}
+
+.composer-mode-change-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  background-color: var(--color-surface-code);
+  border: 1px solid var(--color-border);
+  transition: all var(--transition-fast);
+}
+
+.composer-mode-change-btn:hover {
+  color: var(--color-text-primary);
+  background-color: #ffffff;
+}
+
+/* Single Language Selector in Composer Header */
+.composer-language-selector {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.composer-language-label {
+  font-size: 15px; /* Big readable font */
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+
+.composer-language-dropdown {
+  background-color: #ffffff;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-primary);
+  font-size: 15px; /* Big readable font */
+  font-weight: 500;
+  padding: 8px 14px;
+  border-radius: var(--radius-sm);
+  outline: none;
+  cursor: pointer;
+  transition: border-color var(--transition-fast);
+}
+
+.composer-language-dropdown:focus {
+  border-color: var(--color-border-strong);
+}
+
+/* Global Error Banner */
+.composer-global-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background-color: var(--status-fail-bg);
+  border-bottom: 1px solid var(--status-fail-border);
+  color: var(--status-fail-text);
+  padding: 12px 20px;
+  font-size: 15px;
+}
+
+/* Body */
+.litmus-composer__body {
+  padding: 24px 26px;
+}
+
+/* Footer & Send Button */
+.litmus-composer__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 26px 18px;
+  border-top: 1px solid var(--color-border-subtle);
+  background-color: #f7f9f0;
+}
+
+.litmus-composer__footer-info {
+  display: flex;
+  align-items: center;
+}
+
+.litmus-composer__footer-tip {
+  font-size: 14px;
+  color: var(--color-text-tertiary);
+  font-family: var(--font-sans);
+}
+
+.litmus-send-button {
+  width: 46px;
+  height: 46px;
+  border-radius: var(--radius-full);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: var(--color-brand-primary);
+  color: #ffffff;
+  transition: all var(--transition-fast);
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(25, 45, 25, 0.25);
+}
+
+.litmus-send-button:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 5px 16px rgba(25, 45, 25, 0.35);
+  background-color: var(--color-brand-hover);
+}
+
+.litmus-send-button:disabled {
+  background-color: var(--color-border);
+  color: var(--color-text-disabled);
+  cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
+}
+
+.litmus-send-button__icon {
+  transition: transform var(--transition-fast);
+}
+
+.litmus-send-button:hover:not(:disabled) .litmus-send-button__icon {
+  transform: translateY(-1px);
+}
