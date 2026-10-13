@@ -1,0 +1,126 @@
+.litmus-code-highlighter {
+  background-color: #121613;
+  border: 1px solid #283329;
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+}
+
+.litmus-code-highlighter__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background-color: #18201a;
+  border-bottom: 1px solid #283329;
+}
+
+.litmus-code-highlighter__lang-tag {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #8db587;
+  background-color: rgba(102, 133, 81, 0.2);
+  padding: 3px 8px;
+  border-radius: 4px;
+  border: 1px solid rgba(102, 133, 81, 0.35);
+}
+
+.litmus-code-highlighter__copy-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #b5c7b3;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid #334335;
+  border-radius: 4px;
+  padding: 3px 9px;
+  transition: all var(--transition-fast);
+}
+
+.litmus-code-highlighter__copy-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+}
+
+.litmus-copy-icon--ok {
+  color: #4ade80;
+}
+
+.litmus-code-highlighter__viewport {
+  overflow: auto;
+  max-height: 480px;
+  padding: 12px 0;
+  background-color: #121613;
+}
+
+.litmus-code-highlighter__pre {
+  margin: 0;
+  padding: 0;
+  font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+  font-size: 13.5px;
+  line-height: 1.6;
+}
+
+.litmus-code-highlighter__line {
+  display: flex;
+  align-items: flex-start;
+  min-height: 22px;
+  padding: 0 14px 0 0;
+}
+
+.litmus-code-highlighter__line:hover {
+  background-color: rgba(255, 255, 255, 0.03);
+}
+
+.litmus-code-highlighter__lineno {
+  width: 44px;
+  flex-shrink: 0;
+  text-align: right;
+  padding-right: 14px;
+  color: #4a5c4d;
+  user-select: none;
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.litmus-code-highlighter__content {
+  flex: 1;
+  white-space: pre;
+  word-break: normal;
+  color: #dbe3cf;
+}
+
+/* Syntax Tokens */
+.tok-keyword {
+  color: #ff8b7c;
+  font-weight: 600;
+}
+
+.tok-literal {
+  color: #f7c948;
+  font-weight: 600;
+}
+
+.tok-string {
+  color: #a8d59d;
+}
+
+.tok-comment {
+  color: #6d8570;
+  font-style: italic;
+}
+
+.tok-number {
+  color: #6ee7b7;
+}
+
+.tok-plain {
+  color: #e4ebe0;
+}

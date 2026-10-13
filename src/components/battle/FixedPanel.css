@@ -1,0 +1,111 @@
+.litmus-fixed-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0; /* Critical for internal flex scroll */
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  box-shadow: 0 4px 20px rgba(27, 55, 32, 0.08);
+  position: relative;
+}
+
+/* Charcoal Variant for Left Panel */
+.litmus-fixed-panel--charcoal {
+  background-color: #141815;
+  border: 1px solid #283329;
+  color: #f1f5ee;
+}
+
+.litmus-fixed-panel--charcoal .litmus-fixed-panel__header {
+  background-color: #1a201b;
+  border-bottom: 1px solid #283329;
+  color: #f1f5ee;
+}
+
+.litmus-fixed-panel--charcoal .litmus-fixed-panel__title {
+  color: #f4f8ec;
+}
+
+.litmus-fixed-panel--charcoal .litmus-fixed-panel__subtitle {
+  color: #9ab399;
+}
+
+/* Arena / Elevated Variant for Right Panel */
+.litmus-fixed-panel--arena {
+  background-color: #ffffff;
+  border: 1px solid #c2caa8;
+  color: var(--color-text-primary);
+}
+
+.litmus-fixed-panel--arena .litmus-fixed-panel__header {
+  background-color: #fbf9f1;
+  border-bottom: 1px solid #d6dfcb;
+}
+
+/* Surface Variant */
+.litmus-fixed-panel--surface {
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-primary);
+}
+
+.litmus-fixed-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  flex-shrink: 0;
+  gap: 12px;
+}
+
+.litmus-fixed-panel__titles {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.litmus-fixed-panel__title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.litmus-fixed-panel__title {
+  font-family: var(--font-sans);
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin: 0;
+  white-space: nowrap;
+}
+
+.litmus-fixed-panel__subtitle {
+  font-size: 13px;
+  margin: 0;
+  color: var(--color-text-tertiary);
+  line-height: 1.4;
+}
+
+.litmus-fixed-panel__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.litmus-fixed-panel__body {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 18px;
+  min-height: 0; /* Ensures proper scrollbar behavior */
+}
+
+.litmus-fixed-panel__footer {
+  padding: 10px 18px;
+  border-top: 1px solid var(--color-border);
+  background-color: rgba(0, 0, 0, 0.02);
+  flex-shrink: 0;
+}

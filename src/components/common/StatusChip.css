@@ -1,0 +1,60 @@
+.status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  border-radius: var(--radius-full);
+  line-height: 1;
+  white-space: nowrap;
+  user-select: none;
+  border: 1px solid transparent;
+}
+
+.status-chip--sm {
+  font-size: 12px;
+  padding: 3px 9px;
+}
+
+.status-chip--md {
+  font-size: 14px;
+  padding: 5px 12px;
+}
+
+.status-chip__icon {
+  flex-shrink: 0;
+}
+
+.status-chip__icon--spin {
+  animation: spin 1.4s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* Strict status color assignments for light palette */
+.status-chip--pass {
+  background-color: var(--status-pass-bg);
+  border-color: var(--status-pass-border);
+  color: var(--status-pass-text);
+}
+
+.status-chip--fail {
+  background-color: var(--status-fail-bg);
+  border-color: var(--status-fail-border);
+  color: var(--status-fail-text);
+}
+
+.status-chip--running {
+  background-color: var(--status-running-bg);
+  border-color: var(--status-running-border);
+  color: var(--status-running-text);
+}
+
+.status-chip--inconclusive {
+  background-color: var(--status-inconclusive-bg);
+  border-color: var(--status-inconclusive-border);
+  color: var(--status-inconclusive-text);
+}
