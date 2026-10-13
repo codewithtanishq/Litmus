@@ -4,16 +4,20 @@ A full-stack multi-agent debugging system featuring an adversarial courtroom deb
 
 ---
 
-## Architecture Overview
+## Project Structure
 
-- **Frontend (`/src`, `/public`)**: React + TypeScript + Vite interactive courtroom visualizer and battle interface.
-- **Backend (`/Litmus/Backend`)**: Python-based multi-agent orchestration (LangGraph, local Ollama LLM), sandboxed execution runner, JUnit XML deterministic test evaluator, and SQLite constraint ledger.
+```
+Litmus/
+├── Frontend/         # React + TypeScript + Vite courtroom UI
+└── Litmus/Backend/   # Python LangGraph agents, execution sandbox, & SQLite ledger
+```
 
 ---
 
 ## Frontend Setup (React + TypeScript + Vite)
 
 ```bash
+cd Frontend
 npm install
 npm run dev
 ```
