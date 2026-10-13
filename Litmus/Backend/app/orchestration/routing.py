@@ -52,15 +52,19 @@ def evaluate_round_outcome(state: WorkflowState) -> RoutingDecision:
         # Check explicit status and boolean passed
         if isinstance(result, dict):
             status = result.get("status")
-            passed = result.get("passed", False)
+            passed = result.get("passed")
         else:
             status = getattr(result, "status", None)
-            passed = getattr(result, "passed", False)
+            passed = getattr(result, "passed", None)
 
         # Ensure string comparison or enum value
         status_str = status.value if hasattr(status, "value") else str(status)
 
-        if status_str == TestExecutionStatus.PASSED.value and passed is True:
+        # Compatible with both Member 1 schema (explicit passed bool)
+        # and Member 2 contracts (ExecutionStatus.PASSED with no passed attribute)
+        is_passed = (status_str.upper() == "PASSED") and (passed is True or passed is None)
+
+        if is_passed:
             any_passed = True
             all_failed = False
             break

@@ -250,3 +250,11 @@ class ConstraintLedger:
                 f"sig={c.failure_signature}]\n{c.constraint_text}"
             )
         return "\n".join(parts)
+
+    def get_active_constraints(self, session_id: str, limit: int = 10) -> list[Constraint]:
+        """Alias for get_relevant_constraints to satisfy IConstraintLedger protocol."""
+        return self.get_relevant_constraints(session_id, limit=limit)
+
+    def record_constraint(self, constraint: Constraint) -> None:
+        """Directly persists a constraint record to satisfy IConstraintLedger protocol."""
+        self._repo.save_constraint(constraint)

@@ -34,6 +34,7 @@ from app.orchestration.routing import (
 )
 from app.agents.prosecutor import ProsecutorAgent
 from app.agents.defender import DefenderAgent
+from app.agents.judge import JudgeAgent
 from app.schemas.session import DebugSession
 from app.schemas.patch import CandidatePatch, AgentRole
 from app.schemas.interfaces import IConstraintLedger, ConstraintRecord
@@ -118,13 +119,19 @@ class CourtroomWorkflow:
         self,
         prosecutor_agent: Optional[ProsecutorAgent] = None,
         defender_agent: Optional[DefenderAgent] = None,
-        constraint_ledger: Optional[IConstraintLedger] = None,
+        judge_agent: Optional[JudgeAgent] = None,
+        constraint_ledger: Optional[Any] = None,
         event_publisher: Optional[BaseEventPublisher] = None,
+        sandbox_runner: Optional[Any] = None,
+        test_evaluator: Optional[Any] = None,
     ) -> None:
         self.publisher = event_publisher or get_event_publisher()
         self.prosecutor_agent = prosecutor_agent or ProsecutorAgent(event_publisher=self.publisher)
         self.defender_agent = defender_agent or DefenderAgent(event_publisher=self.publisher)
+        self.judge_agent = judge_agent or JudgeAgent(event_publisher=self.publisher)
         self.constraint_ledger = constraint_ledger
+        self.sandbox_runner = sandbox_runner
+        self.test_evaluator = test_evaluator
 
     def intake_session_node(self, state: WorkflowState) -> WorkflowState:
         """
@@ -371,39 +378,279 @@ class CourtroomWorkflow:
         )
         return state
 
-    # --- Backward compatibility scaffolding methods for full courtroom lifecycle ---
+    # --- Full courtroom lifecycle nodes ---
 
     def execute_candidates_node(self, state: WorkflowState) -> WorkflowState:
-        return self.evaluation_boundary_node(state)
+        """
+        Executes Candidate Fix A and Candidate Fix B in separate, isolated workspaces
+        against the trusted test suite using the sandbox runner.
+        Never runs Fix A in Fix B's workspace or allows environment leakage.
+        Handles SandboxUnavailableError as INFRASTRUCTURE_ERROR without crashing.
+        """
+        session_id = state.get("session_id", "")
+        round_no = state.get("current_round", 1)
+        trusted_tests = state.get("test_suite", "")
+        fix_a = state.get("fix_a") or {}
+        fix_b = state.get("fix_b") or {}
+        state["status"] = "evaluating"
+
+        code_a = fix_a.get("proposed_code", "") if isinstance(fix_a, dict) else getattr(fix_a, "proposed_code", "")
+        code_b = fix_b.get("proposed_code", "") if isinstance(fix_b, dict) else getattr(fix_b, "proposed_code", "")
+
+        cid_a = fix_a.get("patch_id", f"candidate_a_r{round_no}") if isinstance(fix_a, dict) else getattr(fix_a, "patch_id", f"candidate_a_r{round_no}")
+        cid_b = fix_b.get("patch_id", f"candidate_b_r{round_no}") if isinstance(fix_b, dict) else getattr(fix_b, "patch_id", f"candidate_b_r{round_no}")
+
+        self.publisher.emit(
+            event_type=WorkflowEventType.EXECUTION_STARTED,
+            session_id=session_id,
+            round_number=round_no,
+            data={
+                "candidate_ids": [cid_a, cid_b],
+                "prosecutor_id": cid_a,
+                "defender_id": cid_b,
+            },
+        )
+
+        state.setdefault("audit_log", []).append(
+            f"Round {round_no}: Beginning isolated execution of Fix A ({cid_a}) and Fix B ({cid_b})."
+        )
+
+        runner = self.sandbox_runner
+        if runner is None:
+            from app.sandbox.runner import run_candidate
+            runner = run_candidate
+
+        from app.contracts import ExecutionEvidence, ExecutionStatus
+        from app.sandbox.runner import SandboxUnavailableError
+
+        # Execute Fix A in isolated workspace
+        try:
+            ev_a = runner(
+                source_code=code_a,
+                trusted_tests=trusted_tests,
+                candidate_id=cid_a,
+            )
+        except SandboxUnavailableError as err:
+            logger.warning(f"Sandbox unavailable for Fix A ({cid_a}): {err}")
+            ev_a = ExecutionEvidence(
+                candidate_id=cid_a,
+                status=ExecutionStatus.INFRASTRUCTURE_ERROR,
+                error_detail=str(err),
+            )
+        except Exception as err:
+            logger.error(f"Execution failed for Fix A ({cid_a}): {err}", exc_info=True)
+            ev_a = ExecutionEvidence(
+                candidate_id=cid_a,
+                status=ExecutionStatus.INFRASTRUCTURE_ERROR,
+                error_detail=str(err),
+            )
+
+        # Execute Fix B in separate isolated workspace (no leakage)
+        try:
+            ev_b = runner(
+                source_code=code_b,
+                trusted_tests=trusted_tests,
+                candidate_id=cid_b,
+            )
+        except SandboxUnavailableError as err:
+            logger.warning(f"Sandbox unavailable for Fix B ({cid_b}): {err}")
+            ev_b = ExecutionEvidence(
+                candidate_id=cid_b,
+                status=ExecutionStatus.INFRASTRUCTURE_ERROR,
+                error_detail=str(err),
+            )
+        except Exception as err:
+            logger.error(f"Execution failed for Fix B ({cid_b}): {err}", exc_info=True)
+            ev_b = ExecutionEvidence(
+                candidate_id=cid_b,
+                status=ExecutionStatus.INFRASTRUCTURE_ERROR,
+                error_detail=str(err),
+            )
+
+        evidence_dict = {
+            "prosecutor": ev_a,
+            "defender": ev_b,
+            cid_a: ev_a,
+            cid_b: ev_b,
+        }
+        state["execution_evidence"] = evidence_dict
+        state.setdefault("audit_log", []).append(
+            f"Round {round_no}: Candidate execution completed. Fix A: {ev_a.status.value}, Fix B: {ev_b.status.value}."
+        )
+        return state
 
     def evaluate_tests_node(self, state: WorkflowState) -> WorkflowState:
-        session_id = state["session_id"]
+        """
+        Deterministically evaluates raw execution evidence into structured TestResults.
+        Strictly relies on deterministic evaluation (JUnit XML / test execution facts).
+        Never invents or fabricates results.
+        """
+        session_id = state.get("session_id", "")
         round_no = state.get("current_round", 1)
+        evidence_dict = state.get("execution_evidence", {})
+
+        evaluator = self.test_evaluator
+        if evaluator is None:
+            from app.evaluation.test_evaluator import evaluate_candidate
+            evaluator = evaluate_candidate
+
+        ev_a = evidence_dict.get("prosecutor")
+        ev_b = evidence_dict.get("defender")
+
+        results = {}
+        if ev_a is not None:
+            res_a = evaluator(evidence=ev_a, session_id=session_id)
+            results["prosecutor"] = res_a
+            results[ev_a.candidate_id] = res_a
+        if ev_b is not None:
+            res_b = evaluator(evidence=ev_b, session_id=session_id)
+            results["defender"] = res_b
+            results[ev_b.candidate_id] = res_b
+
+        state["test_results"] = results
+
         self.publisher.emit(
             event_type=WorkflowEventType.TESTS_COMPLETED,
             session_id=session_id,
             round_number=round_no,
-            data={"results_count": len(state.get("test_results", {}))},
+            data={
+                "results_count": len(results),
+                "prosecutor_status": getattr(results.get("prosecutor"), "status", None),
+                "defender_status": getattr(results.get("defender"), "status", None),
+            },
         )
-        state.setdefault("audit_log", []).append(f"Round {round_no}: Test evaluation completed.")
+        state.setdefault("audit_log", []).append(
+            f"Round {round_no}: Deterministic test evaluation completed. "
+            f"Fix A: {getattr(results.get('prosecutor'), 'status', 'N/A')}, "
+            f"Fix B: {getattr(results.get('defender'), 'status', 'N/A')}."
+        )
         return state
 
     def judge_node(self, state: WorkflowState) -> WorkflowState:
-        session_id = state["session_id"]
+        """
+        Synthesizes an empirical, evidence-grounded courtroom verdict.
+        Judge receives actual test evidence and explains results without contradicting facts.
+        """
+        session_id = state.get("session_id", "")
         round_no = state.get("current_round", 1)
         state["status"] = "judging"
-        self.publisher.emit(
-            event_type=WorkflowEventType.VERDICT_CREATED,
+
+        session = DebugSession(
             session_id=session_id,
-            round_number=round_no,
-            data={"verdict_pending": True},
+            original_code=state.get("original_code", ""),
+            bug_description=state.get("bug_description", ""),
+            test_suite=state.get("test_suite", ""),
+            current_round=round_no,
         )
-        state.setdefault("audit_log", []).append(f"Round {round_no}: Judge deliberation activated.")
+
+        fix_a = state.get("fix_a")
+        fix_b = state.get("fix_b")
+        prosecutor_patch = CandidatePatch(**fix_a) if isinstance(fix_a, dict) else fix_a
+        defender_patch = CandidatePatch(**fix_b) if isinstance(fix_b, dict) else fix_b
+
+        verdict = self.judge_agent.evaluate_verdict(
+            session=session,
+            prosecutor_patch=prosecutor_patch,
+            defender_patch=defender_patch,
+            test_results=state.get("test_results", {}),
+            round_number=round_no,
+        )
+
+        state["verdict"] = verdict.model_dump() if hasattr(verdict, "model_dump") else verdict
+        decision_val = verdict.decision.value if hasattr(verdict.decision, "value") else str(verdict.decision)
+        state.setdefault("audit_log", []).append(
+            f"Round {round_no}: Judge delivered verdict: {decision_val} "
+            f"(Winner: {verdict.winning_patch_id})."
+        )
         return state
 
     def record_constraints_and_retry_node(self, state: WorkflowState) -> WorkflowState:
-        session_id = state["session_id"]
+        """
+        Records failure evidence from rejected candidates into the Constraint Ledger,
+        increments the round counter, clears round-specific artifacts, and prepares for next retry.
+        """
+        session_id = state.get("session_id", "")
         old_round = state.get("current_round", 1)
+        test_results = state.get("test_results", {})
+        fix_a = state.get("fix_a") or {}
+        fix_b = state.get("fix_b") or {}
+
+        # Record failure constraints in ledger if available
+        if self.constraint_ledger is not None:
+            from app.contracts import (
+                CandidatePatch as ContractCandidatePatch,
+                DebugSession as ContractDebugSession,
+                ExecutionStatus,
+            )
+
+            repo = getattr(self.constraint_ledger, "_repo", None)
+            if repo is not None:
+                try:
+                    if repo.get_session(session_id) is None:
+                        repo.create_session(
+                            ContractDebugSession(
+                                session_id=session_id,
+                                bug_description=state.get("bug_description", "Bug report"),
+                                original_source=state.get("original_code", ""),
+                                trusted_tests=state.get("test_suite", ""),
+                                max_rounds=state.get("max_rounds", 3),
+                            )
+                        )
+                except Exception as exc:
+                    logger.debug(f"Session save note: {exc}")
+
+            # Fix A failure check
+            res_a = test_results.get("prosecutor") or test_results.get(fix_a.get("patch_id"))
+            if res_a is not None and getattr(res_a, "status", None) == ExecutionStatus.FAILED:
+                cand_a = ContractCandidatePatch(
+                    candidate_id=fix_a.get("patch_id", f"candidate_a_r{old_round}"),
+                    session_id=session_id,
+                    agent="prosecutor",
+                    round_number=old_round,
+                    source_code=fix_a.get("proposed_code", ""),
+                    explanation=fix_a.get("explanation", ""),
+                )
+                if repo is not None:
+                    try:
+                        if repo.get_candidate(cand_a.candidate_id) is None:
+                            repo.save_candidate(cand_a)
+                        if repo.get_test_result(res_a.result_id) is None:
+                            repo.save_test_result(res_a)
+                    except Exception as exc:
+                        logger.debug(f"Candidate/Result save note: {exc}")
+
+                if hasattr(self.constraint_ledger, "record_failure"):
+                    try:
+                        self.constraint_ledger.record_failure(cand_a, res_a)
+                    except Exception as exc:
+                        logger.warning(f"Failed to record Fix A failure in ledger: {exc}")
+
+            # Fix B failure check
+            res_b = test_results.get("defender") or test_results.get(fix_b.get("patch_id"))
+            if res_b is not None and getattr(res_b, "status", None) == ExecutionStatus.FAILED:
+                cand_b = ContractCandidatePatch(
+                    candidate_id=fix_b.get("patch_id", f"candidate_b_r{old_round}"),
+                    session_id=session_id,
+                    agent="defender",
+                    round_number=old_round,
+                    source_code=fix_b.get("proposed_code", ""),
+                    explanation=fix_b.get("explanation", ""),
+                )
+                if repo is not None:
+                    try:
+                        if repo.get_candidate(cand_b.candidate_id) is None:
+                            repo.save_candidate(cand_b)
+                        if repo.get_test_result(res_b.result_id) is None:
+                            repo.save_test_result(res_b)
+                    except Exception as exc:
+                        logger.debug(f"Candidate/Result save note: {exc}")
+
+                if hasattr(self.constraint_ledger, "record_failure"):
+                    try:
+                        self.constraint_ledger.record_failure(cand_b, res_b)
+                    except Exception as exc:
+                        logger.warning(f"Failed to record Fix B failure in ledger: {exc}")
+
         new_round = old_round + 1
         state["current_round"] = new_round
 
@@ -411,30 +658,44 @@ class CourtroomWorkflow:
             event_type=WorkflowEventType.CONSTRAINT_RECORDED,
             session_id=session_id,
             round_number=old_round,
-            data={"reason": "Both candidate patches failed in round"},
+            data={"reason": "Candidate patches evaluated and constraints recorded", "round": old_round},
         )
         self.publisher.emit(
             event_type=WorkflowEventType.RETRY_STARTED,
             session_id=session_id,
             round_number=new_round,
-            data={"previous_round": old_round},
+            data={"previous_round": old_round, "new_round": new_round},
         )
+
+        # Clear round-specific candidate patches and results for clean retry
+        state["fix_a"] = None
+        state["fix_b"] = None
+        state.setdefault("candidate_patches", {}).clear()
+        state["test_results"] = {}
+        state["execution_evidence"] = {}
+
         state.setdefault("audit_log", []).append(
-            f"Constraint recorded for round {old_round}. Transitioning to round {new_round}."
+            f"Constraint recorded for round {old_round}. Transitioning to retry round {new_round}."
         )
         return state
 
     def finalize_success_node(self, state: WorkflowState) -> WorkflowState:
-        session_id = state["session_id"]
+        """
+        Finalizes workflow when a candidate patch passes all tests deterministically.
+        """
+        session_id = state.get("session_id", "")
         round_no = state.get("current_round", 1)
         state["status"] = "resolved"
+        winning_patch = state.get("verdict", {}).get("winning_patch_id")
         self.publisher.emit(
             event_type=WorkflowEventType.SESSION_COMPLETED,
             session_id=session_id,
             round_number=round_no,
-            data={"status": "resolved"},
+            data={"status": "resolved", "winning_patch_id": winning_patch},
         )
-        state.setdefault("audit_log", []).append(f"Session {session_id} successfully resolved.")
+        state.setdefault("audit_log", []).append(
+            f"Session {session_id} successfully resolved in round {round_no}."
+        )
         return state
 
 
@@ -445,26 +706,49 @@ WorkflowGraphScaffolding = CourtroomWorkflow
 def build_courtroom_workflow(
     prosecutor_agent: Optional[ProsecutorAgent] = None,
     defender_agent: Optional[DefenderAgent] = None,
-    constraint_ledger: Optional[IConstraintLedger] = None,
+    judge_agent: Optional[JudgeAgent] = None,
+    constraint_ledger: Optional[Any] = None,
     event_publisher: Optional[BaseEventPublisher] = None,
+    sandbox_runner: Optional[Any] = None,
+    test_evaluator: Optional[Any] = None,
+    stop_at_evaluation: Optional[bool] = None,
+    full_pipeline: Optional[bool] = None,
 ):
     """
-    Builds and compiles the LangGraph workflow graph for Prompt 3.
-    Flow: intake_session -> prosecutor -> defender -> evaluation_boundary -> END.
-    Handles conditional error routing to finalize_failure.
+    Builds and compiles the LangGraph courtroom workflow.
+
+    Modes:
+    - If stop_at_evaluation is True (or full_pipeline is not True and judge/runner are None):
+      compiles the Prompt 3 boundary workflow (intake -> prosecutor -> defender -> evaluation_boundary -> END).
+    - If full_pipeline is True (or stop_at_evaluation is False or judge/runner are injected):
+      compiles the complete end-to-end courtroom workflow:
+      intake -> prosecutor -> defender -> evaluation_boundary -> execute_candidates ->
+      evaluate_tests -> judge -> [route_after_judging] -> (finalize_success | record_constraints_and_retry -> prosecutor | finalize_failure).
     """
+    if stop_at_evaluation is True:
+        is_full = False
+    elif full_pipeline is True or stop_at_evaluation is False:
+        is_full = True
+    elif judge_agent is not None or sandbox_runner is not None or test_evaluator is not None:
+        is_full = True
+    else:
+        is_full = False
+
     workflow = CourtroomWorkflow(
         prosecutor_agent=prosecutor_agent,
         defender_agent=defender_agent,
+        judge_agent=judge_agent,
         constraint_ledger=constraint_ledger,
         event_publisher=event_publisher,
+        sandbox_runner=sandbox_runner,
+        test_evaluator=test_evaluator,
     )
 
     from langgraph.graph import StateGraph, START, END
 
     builder = StateGraph(WorkflowState)
 
-    # Register nodes
+    # Register core nodes
     builder.add_node("intake_session", workflow.intake_session_node)
     builder.add_node("prosecutor", workflow.prosecutor_node)
     builder.add_node("defender", workflow.defender_node)
@@ -504,8 +788,54 @@ def build_courtroom_workflow(
         },
     )
 
-    # Terminal edges
-    builder.add_edge("evaluation_boundary", END)
-    builder.add_edge("finalize_failure", END)
+    if not is_full:
+        builder.add_edge("evaluation_boundary", END)
+        builder.add_edge("finalize_failure", END)
+    else:
+        builder.add_node("execute_candidates", workflow.execute_candidates_node)
+        builder.add_node("evaluate_tests", workflow.evaluate_tests_node)
+        builder.add_node("judge", workflow.judge_node)
+        builder.add_node("record_constraints_and_retry", workflow.record_constraints_and_retry_node)
+        builder.add_node("finalize_success", workflow.finalize_success_node)
+
+        builder.add_edge("evaluation_boundary", "execute_candidates")
+        builder.add_edge("execute_candidates", "evaluate_tests")
+        builder.add_edge("evaluate_tests", "judge")
+
+        builder.add_conditional_edges(
+            "judge",
+            route_after_judging,
+            {
+                "finalize_success": "finalize_success",
+                "record_constraints_and_retry": "record_constraints_and_retry",
+                "finalize_failure": "finalize_failure",
+            },
+        )
+
+        builder.add_edge("record_constraints_and_retry", "prosecutor")
+        builder.add_edge("finalize_success", END)
+        builder.add_edge("finalize_failure", END)
 
     return builder.compile()
+
+
+def build_full_courtroom_workflow(
+    prosecutor_agent: Optional[ProsecutorAgent] = None,
+    defender_agent: Optional[DefenderAgent] = None,
+    judge_agent: Optional[JudgeAgent] = None,
+    constraint_ledger: Optional[Any] = None,
+    event_publisher: Optional[BaseEventPublisher] = None,
+    sandbox_runner: Optional[Any] = None,
+    test_evaluator: Optional[Any] = None,
+):
+    """Compiles the complete full courtroom workflow graph."""
+    return build_courtroom_workflow(
+        prosecutor_agent=prosecutor_agent,
+        defender_agent=defender_agent,
+        judge_agent=judge_agent,
+        constraint_ledger=constraint_ledger,
+        event_publisher=event_publisher,
+        sandbox_runner=sandbox_runner,
+        test_evaluator=test_evaluator,
+        full_pipeline=True,
+    )
