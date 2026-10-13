@@ -1,0 +1,6 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts   = "-v --timeout=60"
+filterwarnings = [
+    "ignore::pytest.PytestCollectionWarning",
+]
