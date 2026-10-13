@@ -106,12 +106,34 @@ class TestRoutingLogic:
 
 class TestWorkflowGraphScaffolding:
     def test_node_executions_and_state_updates(self):
+        from unittest import mock
+        from app.schemas.patch import CandidatePatch, AgentRole
+        from app.agents.prosecutor import ProsecutorAgent
+        from app.agents.defender import DefenderAgent
+
         session = DebugSession(
             original_code="code",
             bug_description="desc",
         )
         state = create_initial_workflow_state(session, max_rounds=2)
-        scaffolding = WorkflowGraphScaffolding()
+
+        mock_prosecutor = mock.MagicMock(spec=ProsecutorAgent)
+        mock_prosecutor.analyze_and_propose.return_value = CandidatePatch(
+            agent_role=AgentRole.PROSECUTOR,
+            proposed_code="fixed code A",
+            explanation="Fix A rationale",
+        )
+        mock_defender = mock.MagicMock(spec=DefenderAgent)
+        mock_defender.critique_and_propose.return_value = CandidatePatch(
+            agent_role=AgentRole.DEFENDER,
+            proposed_code="fixed code B",
+            explanation="Fix B rationale",
+        )
+
+        scaffolding = WorkflowGraphScaffolding(
+            prosecutor_agent=mock_prosecutor,
+            defender_agent=mock_defender,
+        )
 
         # Step 1: Intake
         state = scaffolding.intake_session_node(state)
@@ -119,13 +141,15 @@ class TestWorkflowGraphScaffolding:
 
         # Step 2: Prosecutor
         state = scaffolding.prosecutor_node(state)
-        assert "Prosecutor node activated" in state["audit_log"][-1]
+        assert any("Prosecutor node activated" in log for log in state["audit_log"])
+        assert state["fix_a"] is not None
 
         # Step 3: Defender
         state = scaffolding.defender_node(state)
-        assert "Defender node activated" in state["audit_log"][-1]
+        assert any("Defender node activated" in log for log in state["audit_log"])
+        assert state["fix_b"] is not None
 
-        # Step 4: Execute candidates
+        # Step 4: Execute candidates / evaluation boundary
         state = scaffolding.execute_candidates_node(state)
         assert state["status"] == "evaluating"
 

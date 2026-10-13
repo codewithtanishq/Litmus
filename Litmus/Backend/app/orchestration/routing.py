@@ -96,3 +96,40 @@ def route_after_judging(state: WorkflowState) -> str:
         return "finalize_failure"
 
     return "finalize_failure"
+
+
+def route_after_intake(state: WorkflowState) -> str:
+    """
+    Conditional edge routing after intake_session.
+    If session validation failed or errors exist, route to finalize_failure.
+    Otherwise, route to prosecutor.
+    """
+    if state.get("errors") and len(state.get("errors", [])) > 0:
+        return "finalize_failure"
+    return "prosecutor"
+
+
+def route_after_prosecutor(state: WorkflowState) -> str:
+    """
+    Conditional edge routing after prosecutor node.
+    If Prosecutor encountered an error or failed to generate Fix A, route to finalize_failure.
+    Never silently continue with a missing candidate patch.
+    """
+    has_errors = bool(state.get("errors"))
+    has_fix_a = bool(state.get("fix_a") or state.get("candidate_patches", {}).get("prosecutor"))
+    if has_errors or not has_fix_a:
+        return "finalize_failure"
+    return "defender"
+
+
+def route_after_defender(state: WorkflowState) -> str:
+    """
+    Conditional edge routing after defender node.
+    If Defender encountered an error or failed to generate Fix B, route to finalize_failure.
+    Never silently continue with a missing candidate patch.
+    """
+    has_errors = bool(state.get("errors"))
+    has_fix_b = bool(state.get("fix_b") or state.get("candidate_patches", {}).get("defender"))
+    if has_errors or not has_fix_b:
+        return "finalize_failure"
+    return "evaluation_boundary"

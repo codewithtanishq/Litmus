@@ -1,40 +1,44 @@
 """
-LangGraph workflow orchestration scaffolding for Swarm Debugger.
+LangGraph workflow orchestration for Swarm Debugger.
 
-Defines the planned nodes, edges, conditional transitions, and execution graph.
+Connects the Prosecutor and Defender AI agents into an orchestrated execution graph
+leading to the evaluation integration boundary for Member 2's sandbox runner.
 
-Architecture:
-  [Intake Session]
-         │
+Execution Flow for Prompt 3:
+  [Intake Session Node]
+         │ (route_after_intake)
          ▼
-  [Prosecutor (Fix A)]
-         │
+  [Prosecutor Node: Propose Fix A]
+         │ (route_after_prosecutor: success -> defender, error -> finalize_failure)
          ▼
-  [Defender (Fix B)]
-         │
+  [Defender Node: Critique & Propose Fix B]
+         │ (route_after_defender: success -> evaluation_boundary, error -> finalize_failure)
          ▼
-  [Execute Candidates (Member 2 Sandbox)]
-         │
+  [Evaluation Integration Boundary Node]
+         │ (ready for Member 2 sandbox & deterministic evaluator)
          ▼
-  [Evaluate Tests (Member 2 Evaluator)]
-         │
-         ▼
-  [Judge Verdict]
-         │
-         ▼
-  <Conditional Router>
-     ├── (Test Passed) ───────────────► [Finalize Success]
-     ├── (All Failed & Round < Max) ──► [Record Constraints] ──► (Loop back to Prosecutor)
-     └── (All Failed & Round >= Max) ─► [Finalize Failure]
+       [END]
 """
 
 from typing import Any, Dict, List, Optional
 import logging
 
 from app.orchestration.state import WorkflowState
-from app.orchestration.routing import route_after_judging, RoutingDecision, evaluate_round_outcome
+from app.orchestration.routing import (
+    route_after_intake,
+    route_after_prosecutor,
+    route_after_defender,
+    route_after_judging,
+    RoutingDecision,
+    evaluate_round_outcome,
+)
+from app.agents.prosecutor import ProsecutorAgent
+from app.agents.defender import DefenderAgent
+from app.schemas.session import DebugSession
+from app.schemas.patch import CandidatePatch, AgentRole
+from app.schemas.interfaces import IConstraintLedger, ConstraintRecord
 from app.schemas.events import WorkflowEventType
-from app.events.publisher import get_event_publisher
+from app.events.publisher import get_event_publisher, BaseEventPublisher
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +58,11 @@ PLANNED_NODES: List[Dict[str, str]] = [
         "name": "defender",
         "owner": "Member 1",
         "description": "Defender critiques Prosecutor's diagnosis and independently proposes Fix B.",
+    },
+    {
+        "name": "evaluation_boundary",
+        "owner": "Member 1 (Boundary) / Member 2 (Destination)",
+        "description": "Validates both Fix A and Fix B are complete and signals readiness for Member 2 sandbox execution.",
     },
     {
         "name": "execute_candidates",
@@ -88,9 +97,10 @@ PLANNED_NODES: List[Dict[str, str]] = [
 ]
 
 PLANNED_EDGES: List[Dict[str, str]] = [
-    {"from": "intake_session", "to": "prosecutor", "type": "direct"},
-    {"from": "prosecutor", "to": "defender", "type": "direct"},
-    {"from": "defender", "to": "execute_candidates", "type": "direct"},
+    {"from": "intake_session", "to": "prosecutor", "type": "conditional"},
+    {"from": "prosecutor", "to": "defender", "type": "conditional"},
+    {"from": "defender", "to": "evaluation_boundary", "type": "conditional"},
+    {"from": "evaluation_boundary", "to": "execute_candidates", "type": "boundary"},
     {"from": "execute_candidates", "to": "evaluate_tests", "type": "direct"},
     {"from": "evaluate_tests", "to": "judge", "type": "direct"},
     {"from": "judge", "to": "conditional_router", "type": "conditional"},
@@ -98,24 +108,53 @@ PLANNED_EDGES: List[Dict[str, str]] = [
 ]
 
 
-class WorkflowGraphScaffolding:
+class CourtroomWorkflow:
     """
-    Scaffolding for the LangGraph courtroom workflow.
-    Defines architectural node handlers and validates state transitions.
+    Workflow engine managing node execution and state transitions.
+    Supports dependency injection for agents, constraint ledger, and event publisher.
     """
 
-    def __init__(self) -> None:
-        self.publisher = get_event_publisher()
+    def __init__(
+        self,
+        prosecutor_agent: Optional[ProsecutorAgent] = None,
+        defender_agent: Optional[DefenderAgent] = None,
+        constraint_ledger: Optional[IConstraintLedger] = None,
+        event_publisher: Optional[BaseEventPublisher] = None,
+    ) -> None:
+        self.publisher = event_publisher or get_event_publisher()
+        self.prosecutor_agent = prosecutor_agent or ProsecutorAgent(event_publisher=self.publisher)
+        self.defender_agent = defender_agent or DefenderAgent(event_publisher=self.publisher)
+        self.constraint_ledger = constraint_ledger
 
     def intake_session_node(self, state: WorkflowState) -> WorkflowState:
-        """Intake node: registers session and publishes session_started event."""
-        session_id = state["session_id"]
+        """
+        Intake node: validates input, registers session, and publishes session_started event.
+        """
+        session_id = state.get("session_id", "")
         round_no = state.get("current_round", 1)
+        original_code = state.get("original_code", "")
+        bug_description = state.get("bug_description", "")
+
+        # Input validation
+        if not original_code or not bug_description:
+            err = "Invalid input: original_code and bug_description must not be empty."
+            logger.error(err)
+            state.setdefault("errors", []).append(err)
+            state["status"] = "failed"
+            self.publisher.emit(
+                event_type=WorkflowEventType.SESSION_FAILED,
+                session_id=session_id,
+                round_number=round_no,
+                data={"error": err},
+            )
+            state.setdefault("audit_log", []).append(f"Session {session_id} intake rejected: {err}")
+            return state
+
         self.publisher.emit(
             event_type=WorkflowEventType.SESSION_STARTED,
             session_id=session_id,
             round_number=round_no,
-            data={"bug_description": state.get("bug_description", "")},
+            data={"bug_description": bug_description},
         )
         state["status"] = "investigating"
         state.setdefault("audit_log", []).append(f"Session {session_id} entered intake.")
@@ -123,56 +162,221 @@ class WorkflowGraphScaffolding:
 
     def prosecutor_node(self, state: WorkflowState) -> WorkflowState:
         """
-        Prosecutor node scaffolding:
-        Prepares state for Prosecutor agent prompt execution.
+        Prosecutor node:
+        Retrieves active constraints from Member 2's Constraint Ledger,
+        invokes ProsecutorAgent to diagnose the bug, and stores Fix A.
         """
-        session_id = state["session_id"]
+        if state.get("errors") and len(state["errors"]) > 0:
+            return state
+
+        session_id = state.get("session_id", "")
         round_no = state.get("current_round", 1)
-        self.publisher.emit(
-            event_type=WorkflowEventType.AGENT_STARTED,
-            session_id=session_id,
-            round_number=round_no,
-            data={"agent_role": "prosecutor"},
-        )
+        original_code = state.get("original_code", "")
+        bug_description = state.get("bug_description", "")
+        test_suite = state.get("test_suite", "")
+
         state.setdefault("audit_log", []).append(f"Round {round_no}: Prosecutor node activated.")
+
+        # Retrieve active constraints from Member 2 ledger
+        constraints: List[ConstraintRecord] = []
+        if self.constraint_ledger is not None:
+            try:
+                constraints = self.constraint_ledger.get_active_constraints(session_id) or []
+            except Exception as exc:
+                logger.warning(f"Failed to query Constraint Ledger for session {session_id}: {exc}")
+                constraints = []
+
+        try:
+            session = DebugSession(
+                session_id=session_id,
+                original_code=original_code,
+                bug_description=bug_description,
+                test_suite=test_suite,
+                current_round=round_no,
+            )
+
+            patch = self.prosecutor_agent.analyze_and_propose(
+                session=session,
+                constraints=constraints,
+                round_number=round_no,
+            )
+
+            # Store validated Fix A
+            patch_dict = patch.model_dump()
+            state.setdefault("candidate_patches", {})["prosecutor"] = patch_dict
+            state["fix_a"] = patch_dict
+            state.setdefault("audit_log", []).append(
+                f"Round {round_no}: Prosecutor successfully proposed Fix A (patch_id: {patch.patch_id})."
+            )
+
+        except Exception as exc:
+            err_msg = f"Prosecutor agent failed: {exc}"
+            logger.error(err_msg, exc_info=True)
+            state.setdefault("errors", []).append(err_msg)
+            state.setdefault("agent_errors", {})["prosecutor"] = str(exc)
+            state["status"] = "failed"
+            self.publisher.emit(
+                event_type=WorkflowEventType.SESSION_FAILED,
+                session_id=session_id,
+                round_number=round_no,
+                data={"agent_role": AgentRole.PROSECUTOR.value, "error": str(exc)},
+            )
+            state.setdefault("audit_log", []).append(f"Round {round_no}: {err_msg}")
+
         return state
 
     def defender_node(self, state: WorkflowState) -> WorkflowState:
         """
-        Defender node scaffolding:
-        Prepares state for Defender agent prompt execution.
+        Defender node:
+        Critically evaluates Fix A from the Prosecutor, formulates an adversarial
+        critique, and generates Candidate Patch B.
         """
-        session_id = state["session_id"]
+        if state.get("errors") and len(state["errors"]) > 0:
+            return state
+
+        session_id = state.get("session_id", "")
         round_no = state.get("current_round", 1)
-        self.publisher.emit(
-            event_type=WorkflowEventType.AGENT_STARTED,
-            session_id=session_id,
-            round_number=round_no,
-            data={"agent_role": "defender"},
-        )
+        original_code = state.get("original_code", "")
+        bug_description = state.get("bug_description", "")
+        test_suite = state.get("test_suite", "")
+
         state.setdefault("audit_log", []).append(f"Round {round_no}: Defender node activated.")
+
+        fix_a_data = state.get("fix_a") or state.get("candidate_patches", {}).get("prosecutor")
+        if not fix_a_data:
+            err_msg = "Defender failed: Fix A is missing; Defender cannot critique without Fix A from Prosecutor."
+            logger.error(err_msg)
+            state.setdefault("errors", []).append(err_msg)
+            state.setdefault("agent_errors", {})["defender"] = err_msg
+            state["status"] = "failed"
+            self.publisher.emit(
+                event_type=WorkflowEventType.SESSION_FAILED,
+                session_id=session_id,
+                round_number=round_no,
+                data={"agent_role": AgentRole.DEFENDER.value, "error": err_msg},
+            )
+            state.setdefault("audit_log", []).append(f"Round {round_no}: {err_msg}")
+            return state
+
+        # Deserialize Fix A
+        if isinstance(fix_a_data, dict):
+            prosecutor_patch = CandidatePatch(**fix_a_data)
+        else:
+            prosecutor_patch = fix_a_data
+
+        # Retrieve active constraints
+        constraints: List[ConstraintRecord] = []
+        if self.constraint_ledger is not None:
+            try:
+                constraints = self.constraint_ledger.get_active_constraints(session_id) or []
+            except Exception as exc:
+                logger.warning(f"Failed to query Constraint Ledger for session {session_id}: {exc}")
+                constraints = []
+
+        try:
+            session = DebugSession(
+                session_id=session_id,
+                original_code=original_code,
+                bug_description=bug_description,
+                test_suite=test_suite,
+                current_round=round_no,
+            )
+
+            patch = self.defender_agent.critique_and_propose(
+                session=session,
+                prosecutor_patch=prosecutor_patch,
+                constraints=constraints,
+                round_number=round_no,
+            )
+
+            # Store validated Fix B
+            patch_dict = patch.model_dump()
+            state.setdefault("candidate_patches", {})["defender"] = patch_dict
+            state["fix_b"] = patch_dict
+            state.setdefault("audit_log", []).append(
+                f"Round {round_no}: Defender successfully proposed Fix B (patch_id: {patch.patch_id})."
+            )
+
+        except Exception as exc:
+            err_msg = f"Defender agent failed: {exc}"
+            logger.error(err_msg, exc_info=True)
+            state.setdefault("errors", []).append(err_msg)
+            state.setdefault("agent_errors", {})["defender"] = str(exc)
+            state["status"] = "failed"
+            self.publisher.emit(
+                event_type=WorkflowEventType.SESSION_FAILED,
+                session_id=session_id,
+                round_number=round_no,
+                data={"agent_role": AgentRole.DEFENDER.value, "error": str(exc)},
+            )
+            state.setdefault("audit_log", []).append(f"Round {round_no}: {err_msg}")
+
         return state
 
-    def execute_candidates_node(self, state: WorkflowState) -> WorkflowState:
+    def evaluation_boundary_node(self, state: WorkflowState) -> WorkflowState:
         """
-        Scaffolding boundary interface for Member 2's sandbox execution.
+        Evaluation integration boundary:
+        Confirms both candidate patches (Fix A and Fix B) are validated and ready
+        for Member 2's sandbox execution and deterministic evaluation.
+        Does NOT claim that any test passed or fabricate results.
         """
-        session_id = state["session_id"]
+        session_id = state.get("session_id", "")
         round_no = state.get("current_round", 1)
+        fix_a = state.get("fix_a")
+        fix_b = state.get("fix_b")
+
+        if not fix_a or not fix_b:
+            err_msg = "Evaluation boundary error: Missing Candidate Patch A or B."
+            logger.error(err_msg)
+            state.setdefault("errors", []).append(err_msg)
+            state["status"] = "failed"
+            return state
+
+        state["status"] = "evaluating"
         self.publisher.emit(
             event_type=WorkflowEventType.EXECUTION_STARTED,
             session_id=session_id,
             round_number=round_no,
-            data={"candidates": list(state.get("candidate_patches", {}).keys())},
+            data={
+                "candidates_ready": ["prosecutor", "defender"],
+                "ready_for_evaluation": True,
+                "fix_a_id": fix_a.get("patch_id"),
+                "fix_b_id": fix_b.get("patch_id"),
+            },
         )
-        state["status"] = "evaluating"
-        state.setdefault("audit_log", []).append(f"Round {round_no}: Execution initiated in sandbox.")
+        state.setdefault("audit_log", []).append(
+            f"Round {round_no}: Evaluation boundary reached. Candidate Patch A and Candidate Patch B "
+            f"are validated and ready for Member 2 sandbox execution and deterministic evaluation."
+        )
         return state
 
+    def finalize_failure_node(self, state: WorkflowState) -> WorkflowState:
+        """
+        Finalizes workflow when an agent or session fails.
+        """
+        session_id = state.get("session_id", "")
+        round_no = state.get("current_round", 1)
+        max_rounds = state.get("max_rounds", 3)
+        final_status = "max_rounds_reached" if round_no >= max_rounds and not state.get("errors") else "failed"
+        state["status"] = final_status
+
+        self.publisher.emit(
+            event_type=WorkflowEventType.SESSION_FAILED,
+            session_id=session_id,
+            round_number=round_no,
+            data={"status": final_status, "errors": state.get("errors", [])},
+        )
+        state.setdefault("audit_log", []).append(
+            f"Session {session_id} terminated with status {final_status}."
+        )
+        return state
+
+    # --- Backward compatibility scaffolding methods for full courtroom lifecycle ---
+
+    def execute_candidates_node(self, state: WorkflowState) -> WorkflowState:
+        return self.evaluation_boundary_node(state)
+
     def evaluate_tests_node(self, state: WorkflowState) -> WorkflowState:
-        """
-        Scaffolding boundary interface for Member 2's deterministic test evaluation.
-        """
         session_id = state["session_id"]
         round_no = state.get("current_round", 1)
         self.publisher.emit(
@@ -185,10 +389,6 @@ class WorkflowGraphScaffolding:
         return state
 
     def judge_node(self, state: WorkflowState) -> WorkflowState:
-        """
-        Judge node scaffolding:
-        Prepares state for Judge agent to produce empirical verdict.
-        """
         session_id = state["session_id"]
         round_no = state.get("current_round", 1)
         state["status"] = "judging"
@@ -202,10 +402,6 @@ class WorkflowGraphScaffolding:
         return state
 
     def record_constraints_and_retry_node(self, state: WorkflowState) -> WorkflowState:
-        """
-        Scaffolding boundary interface for Member 2's Constraint Ledger persistence.
-        Increments round and loops back for next debate round.
-        """
         session_id = state["session_id"]
         old_round = state.get("current_round", 1)
         new_round = old_round + 1
@@ -229,7 +425,6 @@ class WorkflowGraphScaffolding:
         return state
 
     def finalize_success_node(self, state: WorkflowState) -> WorkflowState:
-        """Finalizes workflow when a successful patch is verified."""
         session_id = state["session_id"]
         round_no = state.get("current_round", 1)
         state["status"] = "resolved"
@@ -242,77 +437,75 @@ class WorkflowGraphScaffolding:
         state.setdefault("audit_log", []).append(f"Session {session_id} successfully resolved.")
         return state
 
-    def finalize_failure_node(self, state: WorkflowState) -> WorkflowState:
-        """Finalizes workflow when all attempts fail or max rounds are exhausted."""
-        session_id = state["session_id"]
-        round_no = state.get("current_round", 1)
-        max_rounds = state.get("max_rounds", 3)
-        final_status = "max_rounds_reached" if round_no >= max_rounds else "failed"
-        state["status"] = final_status
-        self.publisher.emit(
-            event_type=WorkflowEventType.SESSION_FAILED,
-            session_id=session_id,
-            round_number=round_no,
-            data={"status": final_status},
-        )
-        state.setdefault("audit_log", []).append(f"Session {session_id} terminated with status {final_status}.")
-        return state
+
+# Alias for backwards compatibility with Prompt 1 imports
+WorkflowGraphScaffolding = CourtroomWorkflow
 
 
-def build_courtroom_workflow():
+def build_courtroom_workflow(
+    prosecutor_agent: Optional[ProsecutorAgent] = None,
+    defender_agent: Optional[DefenderAgent] = None,
+    constraint_ledger: Optional[IConstraintLedger] = None,
+    event_publisher: Optional[BaseEventPublisher] = None,
+):
     """
-    Builds the workflow graph definition.
-    If 'langgraph' is installed, compiles and returns a LangGraph StateGraph.
-    Otherwise, returns the WorkflowGraphScaffolding instance.
+    Builds and compiles the LangGraph workflow graph for Prompt 3.
+    Flow: intake_session -> prosecutor -> defender -> evaluation_boundary -> END.
+    Handles conditional error routing to finalize_failure.
     """
-    scaffolding = WorkflowGraphScaffolding()
+    workflow = CourtroomWorkflow(
+        prosecutor_agent=prosecutor_agent,
+        defender_agent=defender_agent,
+        constraint_ledger=constraint_ledger,
+        event_publisher=event_publisher,
+    )
 
-    try:
-        from langgraph.graph import StateGraph, END  # type: ignore
+    from langgraph.graph import StateGraph, START, END
 
-        graph_builder = StateGraph(WorkflowState)
+    builder = StateGraph(WorkflowState)
 
-        # Register nodes
-        graph_builder.add_node("intake_session", scaffolding.intake_session_node)
-        graph_builder.add_node("prosecutor", scaffolding.prosecutor_node)
-        graph_builder.add_node("defender", scaffolding.defender_node)
-        graph_builder.add_node("execute_candidates", scaffolding.execute_candidates_node)
-        graph_builder.add_node("evaluate_tests", scaffolding.evaluate_tests_node)
-        graph_builder.add_node("judge", scaffolding.judge_node)
-        graph_builder.add_node("record_constraints_and_retry", scaffolding.record_constraints_and_retry_node)
-        graph_builder.add_node("finalize_success", scaffolding.finalize_success_node)
-        graph_builder.add_node("finalize_failure", scaffolding.finalize_failure_node)
+    # Register nodes
+    builder.add_node("intake_session", workflow.intake_session_node)
+    builder.add_node("prosecutor", workflow.prosecutor_node)
+    builder.add_node("defender", workflow.defender_node)
+    builder.add_node("evaluation_boundary", workflow.evaluation_boundary_node)
+    builder.add_node("finalize_failure", workflow.finalize_failure_node)
 
-        # Set entry point
-        graph_builder.set_entry_point("intake_session")
+    # Entry point
+    builder.add_edge(START, "intake_session")
 
-        # Define deterministic sequential transitions
-        graph_builder.add_edge("intake_session", "prosecutor")
-        graph_builder.add_edge("prosecutor", "defender")
-        graph_builder.add_edge("defender", "execute_candidates")
-        graph_builder.add_edge("execute_candidates", "evaluate_tests")
-        graph_builder.add_edge("evaluate_tests", "judge")
+    # Conditional edge: intake_session -> prosecutor or finalize_failure
+    builder.add_conditional_edges(
+        "intake_session",
+        route_after_intake,
+        {
+            "prosecutor": "prosecutor",
+            "finalize_failure": "finalize_failure",
+        },
+    )
 
-        # Define conditional transition after judging
-        graph_builder.add_conditional_edges(
-            "judge",
-            route_after_judging,
-            {
-                "finalize_success": "finalize_success",
-                "record_constraints_and_retry": "record_constraints_and_retry",
-                "finalize_failure": "finalize_failure",
-            },
-        )
+    # Conditional edge: prosecutor -> defender or finalize_failure
+    builder.add_conditional_edges(
+        "prosecutor",
+        route_after_prosecutor,
+        {
+            "defender": "defender",
+            "finalize_failure": "finalize_failure",
+        },
+    )
 
-        # Loop back from retry to prosecutor
-        graph_builder.add_edge("record_constraints_and_retry", "prosecutor")
+    # Conditional edge: defender -> evaluation_boundary or finalize_failure
+    builder.add_conditional_edges(
+        "defender",
+        route_after_defender,
+        {
+            "evaluation_boundary": "evaluation_boundary",
+            "finalize_failure": "finalize_failure",
+        },
+    )
 
-        # Terminal edges
-        graph_builder.add_edge("finalize_success", END)
-        graph_builder.add_edge("finalize_failure", END)
+    # Terminal edges
+    builder.add_edge("evaluation_boundary", END)
+    builder.add_edge("finalize_failure", END)
 
-        return graph_builder.compile()
-
-    except ImportError:
-        logger.info("LangGraph is not installed in the current environment; using WorkflowGraphScaffolding.")
-        return scaffolding
+    return builder.compile()

@@ -33,12 +33,15 @@ class WorkflowState(TypedDict, total=False):
     current_round: int
     max_rounds: int
     status: str
+    fix_a: Optional[Dict[str, Any]]
+    fix_b: Optional[Dict[str, Any]]
     candidate_patches: Dict[str, Any]
     execution_evidence: Dict[str, Any]
     test_results: Dict[str, Any]
     constraints: List[Dict[str, Any]]
     verdict: Optional[Dict[str, Any]]
     errors: List[str]
+    agent_errors: Dict[str, str]
     audit_log: List[str]
 
 
@@ -64,11 +67,14 @@ def create_initial_workflow_state(
         "current_round": session.current_round,
         "max_rounds": max_rounds,
         "status": session.status.value if hasattr(session.status, "value") else str(session.status),
+        "fix_a": None,
+        "fix_b": None,
         "candidate_patches": {},
         "execution_evidence": {},
         "test_results": {},
         "constraints": [],
         "verdict": None,
         "errors": [],
+        "agent_errors": {},
         "audit_log": [f"Session {session.session_id} initialized at round {session.current_round}"],
     }
