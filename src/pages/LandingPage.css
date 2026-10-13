@@ -1,0 +1,113 @@
+.litmus-landing-page {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 40px 24px 80px;
+  background-color: transparent;
+  min-height: 100%;
+  position: relative;
+  overflow-x: hidden;
+}
+
+/* Constant Fixed Background Video (Parallax effect) */
+.litmus-video-bg-container {
+  position: fixed;
+  top: 84px; /* Placed exactly below topbar (38px) + subbar (46px) */
+  left: 52px; /* Placed to the right of sidebar rail */
+  right: 0;
+  bottom: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 0;
+  transform: translate3d(0, 0, 0);
+  will-change: transform;
+}
+
+@media (max-width: 640px) {
+  .litmus-video-bg-container {
+    left: 0;
+  }
+}
+
+.litmus-video-bg {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+  opacity: 1;
+  filter: none; /* Original video colors kept natural with no color or filter applied */
+  transform: translate3d(0, 0, 0);
+  backface-visibility: hidden;
+  image-rendering: auto;
+}
+
+.litmus-landing-content {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+/* Hero Section (Inspired by Image 3 layout) */
+.litmus-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  max-width: 840px;
+  margin-bottom: 28px;
+  gap: 14px;
+}
+
+.litmus-hero__title {
+  font-family: var(--font-serif);
+  font-size: 58px; /* Large, bold, readable font size */
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  color: var(--color-text-primary);
+  line-height: 1.15;
+}
+
+.litmus-hero__title-italic {
+  font-style: italic;
+  font-weight: 400;
+  color: var(--color-brand-primary);
+}
+
+.litmus-hero__subtitle {
+  font-family: var(--font-sans);
+  font-size: 20px; /* Increased font size for readability */
+  color: var(--color-text-secondary);
+  line-height: 1.55;
+  max-width: 640px;
+  font-weight: 400;
+}
+
+/* Sections */
+.litmus-composer-section {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+}
+
+.litmus-recents-section {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  margin-top: 24px;
+}
+
+@media (max-width: 768px) {
+  .litmus-landing-page {
+    padding: 28px 16px 40px;
+  }
+  .litmus-hero__title {
+    font-size: 40px;
+  }
+  .litmus-hero__subtitle {
+    font-size: 17px;
+  }
+}

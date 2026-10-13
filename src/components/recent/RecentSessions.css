@@ -1,0 +1,194 @@
+.recent-sessions-container {
+  width: 100%;
+  max-width: 860px;
+  margin: var(--space-4) auto var(--space-10);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.recent-sessions__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 4px;
+}
+
+.recent-sessions__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.recent-sessions__title-icon {
+  color: var(--color-brand-primary);
+}
+
+.recent-sessions__clear-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
+  color: var(--color-text-tertiary);
+  transition: color var(--transition-fast);
+}
+
+.recent-sessions__clear-btn:hover {
+  color: var(--status-fail);
+}
+
+/* Empty State */
+.recent-sessions__empty {
+  padding: 32px 24px;
+  background-color: #ffffff;
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-lg);
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.recent-sessions__empty-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.recent-sessions__empty-desc {
+  font-size: 14px;
+  color: var(--color-text-secondary);
+  max-width: 480px;
+  line-height: 1.5;
+}
+
+.recent-sessions__empty-action {
+  margin-top: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-brand-primary);
+  background-color: var(--color-brand-light);
+  border: 1px solid var(--color-border);
+  padding: 6px 14px;
+  border-radius: var(--radius-full);
+  transition: all var(--transition-fast);
+}
+
+.recent-sessions__empty-action:hover {
+  background-color: #d1e4cf;
+  border-color: var(--color-brand-primary);
+}
+
+/* List of Cards */
+.recent-sessions__list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.recent-session-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  background-color: #ffffff;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  box-shadow: 0 1px 3px rgba(35, 55, 35, 0.04);
+}
+
+.recent-session-card:hover {
+  background-color: var(--color-surface-hover);
+  border-color: var(--color-brand-primary);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(35, 55, 35, 0.08);
+}
+
+.recent-session-card:focus-visible {
+  outline: 2px solid var(--color-border-focus);
+}
+
+.recent-session-card__main {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.recent-session-card__headline {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.recent-item__mode-icon {
+  color: var(--color-brand-primary);
+  flex-shrink: 0;
+}
+
+.recent-session-card__title {
+  font-size: 16px; /* Big readable font */
+  font-weight: 600;
+  color: var(--color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.recent-session-card__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--color-text-tertiary);
+}
+
+.recent-session-card__lang {
+  color: var(--color-text-secondary);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.recent-session-card__dot {
+  color: var(--color-border);
+}
+
+.recent-session-card__demo-pill {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  background-color: var(--color-brand-light);
+  border: 1px solid var(--color-border);
+  color: var(--color-brand-primary);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+.recent-session-card__right {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-shrink: 0;
+}
+
+.recent-session-card__arrow {
+  color: var(--color-text-tertiary);
+  transition: transform var(--transition-fast), color var(--transition-fast);
+}
+
+.recent-session-card:hover .recent-session-card__arrow {
+  color: var(--color-brand-primary);
+  transform: translateX(2px);
+}

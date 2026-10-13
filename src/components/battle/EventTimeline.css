@@ -1,0 +1,121 @@
+.litmus-event-timeline {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background-color: #172119;
+  border: 1px solid #283a2b;
+  border-radius: var(--radius-md);
+  padding: 8px 12px;
+  overflow: hidden;
+  font-family: var(--font-mono);
+}
+
+.litmus-event-timeline--empty {
+  justify-content: center;
+  color: #7a947d;
+  font-size: 13px;
+}
+
+.litmus-event-timeline__empty-text {
+  font-family: var(--font-sans);
+  font-style: italic;
+}
+
+.litmus-event-timeline__label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #a3c29e;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.litmus-event-timeline__label-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background-color: #668551;
+  box-shadow: 0 0 6px #668551;
+}
+
+.litmus-event-timeline__strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 2px 0;
+  scrollbar-width: thin;
+  flex: 1;
+}
+
+.litmus-event-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background-color: #1f2b21;
+  border: 1px solid #324735;
+  border-radius: var(--radius-sm);
+  padding: 4px 10px;
+  font-size: 12px;
+  white-space: nowrap;
+  color: #dbe3cf;
+  transition: all var(--transition-fast);
+  flex-shrink: 0;
+}
+
+.litmus-event-chip--latest {
+  border-color: #668551;
+  background-color: #243527;
+  box-shadow: 0 0 8px rgba(102, 133, 81, 0.3);
+}
+
+.litmus-event-chip__icon {
+  display: inline-flex;
+  color: #9ab399;
+}
+
+.litmus-event-chip__time {
+  color: #6f8772;
+  font-size: 11px;
+}
+
+.litmus-event-chip__agent {
+  font-size: 10.5px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.litmus-event-chip--prosecutor .litmus-event-chip__agent {
+  background-color: rgba(183, 40, 55, 0.25);
+  color: #ff9da6;
+}
+
+.litmus-event-chip--defender .litmus-event-chip__agent {
+  background-color: rgba(43, 94, 53, 0.3);
+  color: #8be39b;
+}
+
+.litmus-event-chip--judge .litmus-event-chip__agent {
+  background-color: rgba(202, 138, 4, 0.25);
+  color: #fde047;
+}
+
+.litmus-event-chip--system .litmus-event-chip__agent {
+  background-color: rgba(118, 150, 86, 0.2);
+  color: #b5c7b3;
+}
+
+.litmus-event-chip__msg {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--font-sans);
+  color: #ece8d8;
+}

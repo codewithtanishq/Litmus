@@ -1,0 +1,195 @@
+.litmus-window-frame {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--color-bg);
+  color: var(--color-text-primary);
+}
+
+/* 1. Top Bar (Dark Forest Green from Image 2) */
+.litmus-topbar {
+  height: 38px;
+  background-color: var(--color-header-top);
+  color: var(--color-header-top-text);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  user-select: none;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.25);
+  z-index: 50;
+}
+
+.litmus-topbar__left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.litmus-topbar__logo-icon {
+  color: #7bb582;
+}
+
+.litmus-topbar__title {
+  font-family: var(--font-sans);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: #f4f8ec;
+}
+
+.litmus-topbar__controls {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.litmus-window-btn {
+  width: 28px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-header-top-icon);
+  border-radius: 4px;
+  transition: all var(--transition-fast);
+}
+
+.litmus-window-btn:hover {
+  background-color: rgba(255, 255, 255, 0.15);
+  color: #ffffff;
+}
+
+.litmus-window-btn--close:hover {
+  background-color: #d32f2f;
+  color: #ffffff;
+}
+
+/* 2. Subbar with Navigation Tabs (Dashboard, History, Debug: test_failure) */
+.litmus-subbar {
+  height: 46px;
+  background-color: var(--color-subbar-bg);
+  border-bottom: 1px solid var(--color-border);
+  display: flex;
+  align-items: stretch;
+  user-select: none;
+  z-index: 40;
+}
+
+.litmus-subbar__spacer {
+  width: 52px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--color-border);
+}
+
+.litmus-subbar__tabs {
+  display: flex;
+  align-items: stretch;
+  padding-left: 14px;
+  gap: 12px;
+}
+
+.litmus-tab {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 18px;
+  font-size: 16px; /* Big readable and good looking */
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  text-decoration: none;
+  position: relative;
+  transition: color var(--transition-fast);
+  cursor: pointer;
+}
+
+.litmus-tab:hover {
+  color: var(--color-text-primary);
+}
+
+.litmus-tab--active {
+  color: var(--color-text-primary);
+  font-weight: 700;
+}
+
+.litmus-tab--active::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 14px;
+  right: 14px;
+  height: 3px;
+  background-color: var(--color-brand-primary);
+  border-radius: 2px 2px 0 0;
+}
+
+/* 3. Main Body Container with Sidebar and Content Viewport */
+.litmus-body-container {
+  flex: 1;
+  display: flex;
+  min-height: calc(100vh - 84px);
+}
+
+/* Left Sidebar Rail */
+.litmus-sidebar {
+  width: 52px;
+  background-color: var(--color-sidebar-bg);
+  border-right: 1px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 14px 6px 18px;
+  flex-shrink: 0;
+  user-select: none;
+  position: relative;
+  z-index: 30;
+}
+
+.litmus-sidebar__top,
+.litmus-sidebar__bottom {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.litmus-sidebar-btn {
+  width: 38px;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-sidebar-icon);
+  border-radius: var(--radius-sm);
+  transition: all var(--transition-fast);
+  cursor: pointer;
+}
+
+.litmus-sidebar-btn:hover {
+  background-color: var(--color-sidebar-hover);
+  color: var(--color-brand-primary);
+}
+
+.litmus-sidebar-btn--active {
+  background-color: var(--color-sidebar-active);
+  color: var(--color-brand-primary);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+/* Content Viewport */
+.litmus-content-viewport {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--color-bg);
+  overflow-y: auto;
+  position: relative;
+}
+
+@media (max-width: 640px) {
+  .litmus-sidebar {
+    display: none;
+  }
+  .litmus-subbar__spacer {
+    display: none;
+  }
+}
