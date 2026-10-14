@@ -271,10 +271,33 @@ def evaluate_candidate(
             failure_signature="empty_test_suite",
         )
 
+    passed = [r for r in per_test if r.status == "passed"]
     failed = [r for r in per_test if r.status in {"failed", "error"}]
-    sig = _compute_failure_signature(per_test)
+    skipped = [r for r in per_test if r.status == "skipped"]
 
-    overall_status = ExecutionStatus.PASSED if not failed else ExecutionStatus.FAILED
+    # All tests skipped — policy: infrastructure error / no_executed_tests
+    if len(skipped) == len(per_test):
+        return TestResult(
+            result_id=rid,
+            candidate_id=evidence.candidate_id,
+            session_id=session_id,
+            status=ExecutionStatus.INFRASTRUCTURE_ERROR,
+            exit_code=evidence.exit_code,
+            stdout_excerpt=stdout_ex,
+            stderr_excerpt=stderr_ex,
+            per_test_results=per_test,
+            duration_ms=evidence.duration_ms,
+            failure_signature="no_executed_tests",
+        )
+
+    sig = _compute_failure_signature(per_test)
+    is_exit_code_ok = evidence.exit_code is None or evidence.exit_code == 0
+
+    overall_status = (
+        ExecutionStatus.PASSED
+        if (not failed and len(passed) > 0 and is_exit_code_ok)
+        else ExecutionStatus.FAILED
+    )
 
     return TestResult(
         result_id=rid,

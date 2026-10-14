@@ -77,7 +77,7 @@ class OllamaClient:
         self,
         prompt: str,
         system_instruction: Optional[str] = None,
-        format_json: bool = True,
+        format_json: Any = True,
     ) -> str:
         """
         Sends an inference request to the local Ollama /api/generate endpoint.
@@ -86,6 +86,7 @@ class OllamaClient:
             prompt: User/context prompt instructing the model.
             system_instruction: Optional system instruction for agent persona.
             format_json: If True, requests Ollama's constrained JSON output mode.
+                         Can also be a dictionary representing a JSON schema.
 
         Returns:
             The raw text string emitted by the model.
@@ -97,17 +98,23 @@ class OllamaClient:
             OllamaResponseError: If server responds with HTTP error.
         """
         endpoint = f"{self.base_url}/api/generate"
+        options: Dict[str, Any] = {
+            "temperature": self.temperature,
+            "num_ctx": getattr(self.settings, "num_ctx", 8192),
+            "num_predict": getattr(self.settings, "num_predict", 4096),
+        }
         payload: Dict[str, Any] = {
             "model": self.model,
             "prompt": prompt,
             "stream": False,
-            "options": {
-                "temperature": self.temperature,
-            },
+            "options": options,
+            "keep_alive": getattr(self.settings, "keep_alive", "10m"),
         }
         if system_instruction:
             payload["system"] = system_instruction
-        if format_json:
+        if isinstance(format_json, dict):
+            payload["format"] = format_json
+        elif format_json:
             payload["format"] = "json"
 
         client = self._get_client()
@@ -175,10 +182,40 @@ class OllamaClient:
 
         return raw_text.strip()
 
+    @staticmethod
+    def _extract_first_balanced_json(text: str) -> str:
+        """Find the first balanced '{...}' structure in text."""
+        start = text.find("{")
+        if start == -1:
+            return text
+        depth = 0
+        in_string = False
+        escape = False
+        for i in range(start, len(text)):
+            ch = text[i]
+            if escape:
+                escape = False
+                continue
+            if ch == "\\":
+                if in_string:
+                    escape = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                continue
+            if not in_string:
+                if ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        return text[start : i + 1]
+        return text[start:]
+
     def parse_json_response(self, raw_text: str) -> Dict[str, Any]:
         """
         Extracts and parses JSON object from model output text.
-        Handles optional markdown code fences ```json ... ```.
+        Handles optional markdown code fences and extracts first balanced JSON object.
 
         Raises:
             MalformedOutputError: If no valid JSON dictionary can be extracted.
@@ -186,17 +223,16 @@ class OllamaClient:
         cleaned = raw_text.strip()
 
         # Extract markdown json block if present
-        fence_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", cleaned, re.DOTALL)
+        fence_match = re.search(r"```(?:json)?\s*(\{.*)", cleaned, re.DOTALL)
         if fence_match:
-            cleaned = fence_match.group(1).strip()
+            candidate_str = fence_match.group(1).strip()
         else:
-            # Look for the outer-most curly braces
-            brace_match = re.search(r"(\{.*\})", cleaned, re.DOTALL)
-            if brace_match:
-                cleaned = brace_match.group(1).strip()
+            candidate_str = cleaned
+
+        extracted = self._extract_first_balanced_json(candidate_str)
 
         try:
-            parsed = json.loads(cleaned)
+            parsed = json.loads(extracted)
         except json.JSONDecodeError as exc:
             msg = f"Failed to parse model output as JSON: {exc}. Raw snippet: {raw_text[:150]}"
             logger.error(msg)
@@ -208,3 +244,36 @@ class OllamaClient:
             raise MalformedOutputError(msg)
 
         return parsed
+
+    def generate_json(
+        self,
+        prompt: str,
+        system_instruction: Optional[str] = None,
+        schema: Optional[Dict[str, Any]] = None,
+        max_attempts: int = 3,
+    ) -> Dict[str, Any]:
+        """
+        Generates and parses structured JSON output, retrying on MalformedOutputError.
+        """
+        current_prompt = prompt
+        last_error: Optional[MalformedOutputError] = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                raw_text = self.generate(
+                    current_prompt,
+                    system_instruction=system_instruction,
+                    format_json=schema if schema is not None else True,
+                )
+                return self.parse_json_response(raw_text)
+            except MalformedOutputError as exc:
+                last_error = exc
+                logger.warning(
+                    f"Ollama JSON generation attempt {attempt}/{max_attempts} failed: {exc}. Retrying..."
+                )
+                if attempt < max_attempts:
+                    current_prompt = (
+                        f"{prompt}\n\nYour previous reply was invalid: {exc}. "
+                        "Return ONLY valid JSON matching the schema."
+                    )
+        raise last_error or MalformedOutputError("Failed to generate valid JSON after retries.")
+

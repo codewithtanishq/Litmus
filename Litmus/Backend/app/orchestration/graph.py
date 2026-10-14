@@ -218,16 +218,11 @@ class CourtroomWorkflow:
 
         except Exception as exc:
             err_msg = f"Prosecutor agent failed: {exc}"
-            logger.error(err_msg, exc_info=True)
-            state.setdefault("errors", []).append(err_msg)
+            logger.warning(err_msg, exc_info=True)
             state.setdefault("agent_errors", {})["prosecutor"] = str(exc)
-            state["status"] = "failed"
-            self.publisher.emit(
-                event_type=WorkflowEventType.SESSION_FAILED,
-                session_id=session_id,
-                round_number=round_no,
-                data={"agent_role": AgentRole.PROSECUTOR.value, "error": str(exc)},
-            )
+            state.setdefault("limitations", []).append(f"Prosecutor failed: {exc}")
+            state["fix_a"] = None
+            state.setdefault("candidate_patches", {}).pop("prosecutor", None)
             state.setdefault("audit_log", []).append(f"Round {round_no}: {err_msg}")
 
         return state
@@ -237,6 +232,7 @@ class CourtroomWorkflow:
         Defender node:
         Critically evaluates Fix A from the Prosecutor, formulates an adversarial
         critique, and generates Candidate Patch B.
+        If Prosecutor failed, Defender proposes a standalone Fix B.
         """
         if state.get("errors") and len(state["errors"]) > 0:
             return state
@@ -250,26 +246,12 @@ class CourtroomWorkflow:
         state.setdefault("audit_log", []).append(f"Round {round_no}: Defender node activated.")
 
         fix_a_data = state.get("fix_a") or state.get("candidate_patches", {}).get("prosecutor")
-        if not fix_a_data:
-            err_msg = "Defender failed: Fix A is missing; Defender cannot critique without Fix A from Prosecutor."
-            logger.error(err_msg)
-            state.setdefault("errors", []).append(err_msg)
-            state.setdefault("agent_errors", {})["defender"] = err_msg
-            state["status"] = "failed"
-            self.publisher.emit(
-                event_type=WorkflowEventType.SESSION_FAILED,
-                session_id=session_id,
-                round_number=round_no,
-                data={"agent_role": AgentRole.DEFENDER.value, "error": err_msg},
-            )
-            state.setdefault("audit_log", []).append(f"Round {round_no}: {err_msg}")
-            return state
-
-        # Deserialize Fix A
-        if isinstance(fix_a_data, dict):
-            prosecutor_patch = CandidatePatch(**fix_a_data)
-        else:
-            prosecutor_patch = fix_a_data
+        prosecutor_patch: Optional[CandidatePatch] = None
+        if fix_a_data:
+            if isinstance(fix_a_data, dict):
+                prosecutor_patch = CandidatePatch(**fix_a_data)
+            else:
+                prosecutor_patch = fix_a_data
 
         # Retrieve active constraints
         constraints: List[ConstraintRecord] = []
@@ -306,16 +288,11 @@ class CourtroomWorkflow:
 
         except Exception as exc:
             err_msg = f"Defender agent failed: {exc}"
-            logger.error(err_msg, exc_info=True)
-            state.setdefault("errors", []).append(err_msg)
+            logger.warning(err_msg, exc_info=True)
             state.setdefault("agent_errors", {})["defender"] = str(exc)
-            state["status"] = "failed"
-            self.publisher.emit(
-                event_type=WorkflowEventType.SESSION_FAILED,
-                session_id=session_id,
-                round_number=round_no,
-                data={"agent_role": AgentRole.DEFENDER.value, "error": str(exc)},
-            )
+            state.setdefault("limitations", []).append(f"Defender failed: {exc}")
+            state["fix_b"] = None
+            state.setdefault("candidate_patches", {}).pop("defender", None)
             state.setdefault("audit_log", []).append(f"Round {round_no}: {err_msg}")
 
         return state
@@ -323,21 +300,27 @@ class CourtroomWorkflow:
     def evaluation_boundary_node(self, state: WorkflowState) -> WorkflowState:
         """
         Evaluation integration boundary:
-        Confirms both candidate patches (Fix A and Fix B) are validated and ready
+        Confirms at least one candidate patch is validated and ready
         for Member 2's sandbox execution and deterministic evaluation.
-        Does NOT claim that any test passed or fabricate results.
+        Fails only if BOTH Fix A and Fix B are missing.
         """
         session_id = state.get("session_id", "")
         round_no = state.get("current_round", 1)
         fix_a = state.get("fix_a")
         fix_b = state.get("fix_b")
 
-        if not fix_a or not fix_b:
-            err_msg = "Evaluation boundary error: Missing Candidate Patch A or B."
+        if not fix_a and not fix_b:
+            err_msg = "Evaluation boundary error: Missing both Candidate Patch A and B."
             logger.error(err_msg)
             state.setdefault("errors", []).append(err_msg)
             state["status"] = "failed"
             return state
+
+        candidates_ready = []
+        if fix_a:
+            candidates_ready.append("prosecutor")
+        if fix_b:
+            candidates_ready.append("defender")
 
         state["status"] = "evaluating"
         self.publisher.emit(
@@ -345,15 +328,15 @@ class CourtroomWorkflow:
             session_id=session_id,
             round_number=round_no,
             data={
-                "candidates_ready": ["prosecutor", "defender"],
+                "candidates_ready": candidates_ready,
                 "ready_for_evaluation": True,
-                "fix_a_id": fix_a.get("patch_id"),
-                "fix_b_id": fix_b.get("patch_id"),
+                "fix_a_id": fix_a.get("patch_id") if isinstance(fix_a, dict) else getattr(fix_a, "patch_id", None) if fix_a else None,
+                "fix_b_id": fix_b.get("patch_id") if isinstance(fix_b, dict) else getattr(fix_b, "patch_id", None) if fix_b else None,
             },
         )
         state.setdefault("audit_log", []).append(
-            f"Round {round_no}: Evaluation boundary reached. Candidate Patch A and Candidate Patch B "
-            f"are validated and ready for Member 2 sandbox execution and deterministic evaluation."
+            f"Round {round_no}: Evaluation boundary reached. Candidate(s) {candidates_ready} "
+            f"are validated and ready for sandbox execution."
         )
         return state
 
@@ -382,7 +365,7 @@ class CourtroomWorkflow:
 
     def execute_candidates_node(self, state: WorkflowState) -> WorkflowState:
         """
-        Executes Candidate Fix A and Candidate Fix B in separate, isolated workspaces
+        Executes Candidate Fix A and/or Fix B in separate, isolated workspaces
         against the trusted test suite using the sandbox runner.
         Never runs Fix A in Fix B's workspace or allows environment leakage.
         Handles SandboxUnavailableError as INFRASTRUCTURE_ERROR without crashing.
@@ -390,29 +373,33 @@ class CourtroomWorkflow:
         session_id = state.get("session_id", "")
         round_no = state.get("current_round", 1)
         trusted_tests = state.get("test_suite", "")
-        fix_a = state.get("fix_a") or {}
-        fix_b = state.get("fix_b") or {}
+        fix_a = state.get("fix_a")
+        fix_b = state.get("fix_b")
         state["status"] = "evaluating"
 
-        code_a = fix_a.get("proposed_code", "") if isinstance(fix_a, dict) else getattr(fix_a, "proposed_code", "")
-        code_b = fix_b.get("proposed_code", "") if isinstance(fix_b, dict) else getattr(fix_b, "proposed_code", "")
-
-        cid_a = fix_a.get("patch_id", f"candidate_a_r{round_no}") if isinstance(fix_a, dict) else getattr(fix_a, "patch_id", f"candidate_a_r{round_no}")
-        cid_b = fix_b.get("patch_id", f"candidate_b_r{round_no}") if isinstance(fix_b, dict) else getattr(fix_b, "patch_id", f"candidate_b_r{round_no}")
+        candidate_ids = []
+        cid_a = None
+        cid_b = None
+        if fix_a:
+            cid_a = fix_a.get("patch_id", f"candidate_a_r{round_no}") if isinstance(fix_a, dict) else getattr(fix_a, "patch_id", f"candidate_a_r{round_no}")
+            candidate_ids.append(cid_a)
+        if fix_b:
+            cid_b = fix_b.get("patch_id", f"candidate_b_r{round_no}") if isinstance(fix_b, dict) else getattr(fix_b, "patch_id", f"candidate_b_r{round_no}")
+            candidate_ids.append(cid_b)
 
         self.publisher.emit(
             event_type=WorkflowEventType.EXECUTION_STARTED,
             session_id=session_id,
             round_number=round_no,
             data={
-                "candidate_ids": [cid_a, cid_b],
+                "candidate_ids": candidate_ids,
                 "prosecutor_id": cid_a,
                 "defender_id": cid_b,
             },
         )
 
         state.setdefault("audit_log", []).append(
-            f"Round {round_no}: Beginning isolated execution of Fix A ({cid_a}) and Fix B ({cid_b})."
+            f"Round {round_no}: Beginning isolated execution of candidate patches ({candidate_ids})."
         )
 
         runner = self.sandbox_runner
@@ -423,59 +410,65 @@ class CourtroomWorkflow:
         from app.contracts import ExecutionEvidence, ExecutionStatus
         from app.sandbox.runner import SandboxUnavailableError
 
-        # Execute Fix A in isolated workspace
-        try:
-            ev_a = runner(
-                source_code=code_a,
-                trusted_tests=trusted_tests,
-                candidate_id=cid_a,
-            )
-        except SandboxUnavailableError as err:
-            logger.warning(f"Sandbox unavailable for Fix A ({cid_a}): {err}")
-            ev_a = ExecutionEvidence(
-                candidate_id=cid_a,
-                status=ExecutionStatus.INFRASTRUCTURE_ERROR,
-                error_detail=str(err),
-            )
-        except Exception as err:
-            logger.error(f"Execution failed for Fix A ({cid_a}): {err}", exc_info=True)
-            ev_a = ExecutionEvidence(
-                candidate_id=cid_a,
-                status=ExecutionStatus.INFRASTRUCTURE_ERROR,
-                error_detail=str(err),
-            )
+        evidence_dict = {}
 
-        # Execute Fix B in separate isolated workspace (no leakage)
-        try:
-            ev_b = runner(
-                source_code=code_b,
-                trusted_tests=trusted_tests,
-                candidate_id=cid_b,
-            )
-        except SandboxUnavailableError as err:
-            logger.warning(f"Sandbox unavailable for Fix B ({cid_b}): {err}")
-            ev_b = ExecutionEvidence(
-                candidate_id=cid_b,
-                status=ExecutionStatus.INFRASTRUCTURE_ERROR,
-                error_detail=str(err),
-            )
-        except Exception as err:
-            logger.error(f"Execution failed for Fix B ({cid_b}): {err}", exc_info=True)
-            ev_b = ExecutionEvidence(
-                candidate_id=cid_b,
-                status=ExecutionStatus.INFRASTRUCTURE_ERROR,
-                error_detail=str(err),
-            )
+        # Execute Fix A if present
+        if fix_a:
+            code_a = fix_a.get("proposed_code", "") if isinstance(fix_a, dict) else getattr(fix_a, "proposed_code", "")
+            try:
+                ev_a = runner(
+                    source_code=code_a,
+                    trusted_tests=trusted_tests,
+                    candidate_id=cid_a,
+                )
+            except SandboxUnavailableError as err:
+                logger.warning(f"Sandbox unavailable for Fix A ({cid_a}): {err}")
+                ev_a = ExecutionEvidence(
+                    candidate_id=cid_a,
+                    status=ExecutionStatus.INFRASTRUCTURE_ERROR,
+                    error_detail=str(err),
+                )
+            except Exception as err:
+                logger.error(f"Execution failed for Fix A ({cid_a}): {err}", exc_info=True)
+                ev_a = ExecutionEvidence(
+                    candidate_id=cid_a,
+                    status=ExecutionStatus.INFRASTRUCTURE_ERROR,
+                    error_detail=str(err),
+                )
+            evidence_dict["prosecutor"] = ev_a
+            evidence_dict[cid_a] = ev_a
 
-        evidence_dict = {
-            "prosecutor": ev_a,
-            "defender": ev_b,
-            cid_a: ev_a,
-            cid_b: ev_b,
-        }
+        # Execute Fix B if present (isolated workspace, no leakage)
+        if fix_b:
+            code_b = fix_b.get("proposed_code", "") if isinstance(fix_b, dict) else getattr(fix_b, "proposed_code", "")
+            try:
+                ev_b = runner(
+                    source_code=code_b,
+                    trusted_tests=trusted_tests,
+                    candidate_id=cid_b,
+                )
+            except SandboxUnavailableError as err:
+                logger.warning(f"Sandbox unavailable for Fix B ({cid_b}): {err}")
+                ev_b = ExecutionEvidence(
+                    candidate_id=cid_b,
+                    status=ExecutionStatus.INFRASTRUCTURE_ERROR,
+                    error_detail=str(err),
+                )
+            except Exception as err:
+                logger.error(f"Execution failed for Fix B ({cid_b}): {err}", exc_info=True)
+                ev_b = ExecutionEvidence(
+                    candidate_id=cid_b,
+                    status=ExecutionStatus.INFRASTRUCTURE_ERROR,
+                    error_detail=str(err),
+                )
+            evidence_dict["defender"] = ev_b
+            evidence_dict[cid_b] = ev_b
+
         state["execution_evidence"] = evidence_dict
+        st_a = getattr(evidence_dict.get("prosecutor"), "status", "none")
+        st_b = getattr(evidence_dict.get("defender"), "status", "none")
         state.setdefault("audit_log", []).append(
-            f"Round {round_no}: Candidate execution completed. Fix A: {ev_a.status.value}, Fix B: {ev_b.status.value}."
+            f"Round {round_no}: Candidate execution completed. Fix A: {getattr(st_a, 'value', st_a)}, Fix B: {getattr(st_b, 'value', st_b)}."
         )
         return state
 
@@ -484,6 +477,7 @@ class CourtroomWorkflow:
         Deterministically evaluates raw execution evidence into structured TestResults.
         Strictly relies on deterministic evaluation (JUnit XML / test execution facts).
         Never invents or fabricates results.
+        If all evaluated candidates hit INFRASTRUCTURE_ERROR, aborts immediately without burning rounds.
         """
         session_id = state.get("session_id", "")
         round_no = state.get("current_round", 1)
@@ -508,6 +502,26 @@ class CourtroomWorkflow:
             results[ev_b.candidate_id] = res_b
 
         state["test_results"] = results
+
+        # Check if every evaluated candidate has status INFRASTRUCTURE_ERROR
+        evaluated_pairs = []
+        for role, ev in [("prosecutor", ev_a), ("defender", ev_b)]:
+            res = results.get(role)
+            if res is not None:
+                st = getattr(res, "status", None)
+                st_str = st.value if hasattr(st, "value") else str(st).lower()
+                evaluated_pairs.append((role, st_str, ev))
+
+        if evaluated_pairs and all(st == "infrastructure_error" for _, st, _ in evaluated_pairs):
+            details = []
+            for role, _, ev in evaluated_pairs:
+                if ev is not None:
+                    err = getattr(ev, "error_detail", "") or getattr(ev, "stderr", "") or "Sandbox unavailable"
+                    details.append(f"{role}: {err}")
+            err_msg = f"Sandbox infrastructure error: {'; '.join(details)}"
+            logger.error(err_msg)
+            state.setdefault("errors", []).append(err_msg)
+            state["status"] = "failed"
 
         self.publisher.emit(
             event_type=WorkflowEventType.TESTS_COMPLETED,
@@ -572,8 +586,8 @@ class CourtroomWorkflow:
         session_id = state.get("session_id", "")
         old_round = state.get("current_round", 1)
         test_results = state.get("test_results", {})
-        fix_a = state.get("fix_a") or {}
-        fix_b = state.get("fix_b") or {}
+        fix_a = state.get("fix_a")
+        fix_b = state.get("fix_b")
 
         # Record failure constraints in ledger if available
         if self.constraint_ledger is not None:
@@ -597,59 +611,69 @@ class CourtroomWorkflow:
                             )
                         )
                 except Exception as exc:
-                    logger.debug(f"Session save note: {exc}")
+                    logger.warning(f"Session save note: {exc}")
 
-            # Fix A failure check
-            res_a = test_results.get("prosecutor") or test_results.get(fix_a.get("patch_id"))
-            if res_a is not None and getattr(res_a, "status", None) == ExecutionStatus.FAILED:
-                cand_a = ContractCandidatePatch(
-                    candidate_id=fix_a.get("patch_id", f"candidate_a_r{old_round}"),
-                    session_id=session_id,
-                    agent="prosecutor",
-                    round_number=old_round,
-                    source_code=fix_a.get("proposed_code", ""),
-                    explanation=fix_a.get("explanation", ""),
-                )
-                if repo is not None:
-                    try:
-                        if repo.get_candidate(cand_a.candidate_id) is None:
-                            repo.save_candidate(cand_a)
-                        if repo.get_test_result(res_a.result_id) is None:
-                            repo.save_test_result(res_a)
-                    except Exception as exc:
-                        logger.debug(f"Candidate/Result save note: {exc}")
+            # Fix A failure check (FAILED or TIMED_OUT)
+            if fix_a:
+                cid_a = fix_a.get("patch_id", f"candidate_a_r{old_round}") if isinstance(fix_a, dict) else getattr(fix_a, "patch_id", f"candidate_a_r{old_round}")
+                res_a = test_results.get("prosecutor") or test_results.get(cid_a)
+                status_a = getattr(res_a, "status", None)
+                if res_a is not None and status_a in (ExecutionStatus.FAILED, ExecutionStatus.TIMED_OUT):
+                    code_a = fix_a.get("proposed_code", "") if isinstance(fix_a, dict) else getattr(fix_a, "proposed_code", "")
+                    expl_a = fix_a.get("explanation", "") if isinstance(fix_a, dict) else getattr(fix_a, "explanation", "")
+                    cand_a = ContractCandidatePatch(
+                        candidate_id=cid_a,
+                        session_id=session_id,
+                        agent="prosecutor",
+                        round_number=old_round,
+                        source_code=code_a,
+                        explanation=expl_a,
+                    )
+                    if repo is not None:
+                        try:
+                            if repo.get_candidate(cand_a.candidate_id) is None:
+                                repo.save_candidate(cand_a)
+                            if repo.get_test_result(res_a.result_id) is None:
+                                repo.save_test_result(res_a)
+                        except Exception as exc:
+                            logger.warning(f"Candidate/Result save note: {exc}")
 
-                if hasattr(self.constraint_ledger, "record_failure"):
-                    try:
-                        self.constraint_ledger.record_failure(cand_a, res_a)
-                    except Exception as exc:
-                        logger.warning(f"Failed to record Fix A failure in ledger: {exc}")
+                    if hasattr(self.constraint_ledger, "record_failure"):
+                        try:
+                            self.constraint_ledger.record_failure(cand_a, res_a)
+                        except Exception as exc:
+                            logger.warning(f"Failed to record Fix A failure in ledger: {exc}")
 
-            # Fix B failure check
-            res_b = test_results.get("defender") or test_results.get(fix_b.get("patch_id"))
-            if res_b is not None and getattr(res_b, "status", None) == ExecutionStatus.FAILED:
-                cand_b = ContractCandidatePatch(
-                    candidate_id=fix_b.get("patch_id", f"candidate_b_r{old_round}"),
-                    session_id=session_id,
-                    agent="defender",
-                    round_number=old_round,
-                    source_code=fix_b.get("proposed_code", ""),
-                    explanation=fix_b.get("explanation", ""),
-                )
-                if repo is not None:
-                    try:
-                        if repo.get_candidate(cand_b.candidate_id) is None:
-                            repo.save_candidate(cand_b)
-                        if repo.get_test_result(res_b.result_id) is None:
-                            repo.save_test_result(res_b)
-                    except Exception as exc:
-                        logger.debug(f"Candidate/Result save note: {exc}")
+            # Fix B failure check (FAILED or TIMED_OUT)
+            if fix_b:
+                cid_b = fix_b.get("patch_id", f"candidate_b_r{old_round}") if isinstance(fix_b, dict) else getattr(fix_b, "patch_id", f"candidate_b_r{old_round}")
+                res_b = test_results.get("defender") or test_results.get(cid_b)
+                status_b = getattr(res_b, "status", None)
+                if res_b is not None and status_b in (ExecutionStatus.FAILED, ExecutionStatus.TIMED_OUT):
+                    code_b = fix_b.get("proposed_code", "") if isinstance(fix_b, dict) else getattr(fix_b, "proposed_code", "")
+                    expl_b = fix_b.get("explanation", "") if isinstance(fix_b, dict) else getattr(fix_b, "explanation", "")
+                    cand_b = ContractCandidatePatch(
+                        candidate_id=cid_b,
+                        session_id=session_id,
+                        agent="defender",
+                        round_number=old_round,
+                        source_code=code_b,
+                        explanation=expl_b,
+                    )
+                    if repo is not None:
+                        try:
+                            if repo.get_candidate(cand_b.candidate_id) is None:
+                                repo.save_candidate(cand_b)
+                            if repo.get_test_result(res_b.result_id) is None:
+                                repo.save_test_result(res_b)
+                        except Exception as exc:
+                            logger.warning(f"Candidate/Result save note: {exc}")
 
-                if hasattr(self.constraint_ledger, "record_failure"):
-                    try:
-                        self.constraint_ledger.record_failure(cand_b, res_b)
-                    except Exception as exc:
-                        logger.warning(f"Failed to record Fix B failure in ledger: {exc}")
+                    if hasattr(self.constraint_ledger, "record_failure"):
+                        try:
+                            self.constraint_ledger.record_failure(cand_b, res_b)
+                        except Exception as exc:
+                            logger.warning(f"Failed to record Fix B failure in ledger: {exc}")
 
         new_round = old_round + 1
         state["current_round"] = new_round

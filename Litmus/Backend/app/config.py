@@ -32,10 +32,25 @@ class OllamaSettings(BaseModel):
         description="Sampling temperature for deterministic code reasoning.",
     )
     timeout_seconds: float = Field(
-        default=60.0,
+        default=300.0,
         gt=0.0,
         description="Timeout in seconds for LLM generation queries.",
     )
+    num_ctx: int = Field(
+        default=8192,
+        gt=0,
+        description="Context window token size for Ollama.",
+    )
+    num_predict: int = Field(
+        default=4096,
+        gt=0,
+        description="Maximum tokens to predict in Ollama response.",
+    )
+    keep_alive: str = Field(
+        default="10m",
+        description="Ollama keep_alive duration string.",
+    )
+
 
 
 class WorkflowSettings(BaseModel):
@@ -99,7 +114,10 @@ class Settings(BaseModel):
             base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
             model=os.getenv("OLLAMA_MODEL", "qwen2.5-coder:7b"),
             temperature=float(os.getenv("OLLAMA_TEMPERATURE", "0.2")),
-            timeout_seconds=float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "60.0")),
+            timeout_seconds=float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "300.0")),
+            num_ctx=int(os.getenv("OLLAMA_NUM_CTX", "8192")),
+            num_predict=int(os.getenv("OLLAMA_NUM_PREDICT", "4096")),
+            keep_alive=os.getenv("OLLAMA_KEEP_ALIVE", "10m"),
         )
         workflow_settings = WorkflowSettings(
             max_rounds=int(os.getenv("SWARM_MAX_ROUNDS", "3")),

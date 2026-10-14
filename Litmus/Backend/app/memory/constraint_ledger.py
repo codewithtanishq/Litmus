@@ -41,6 +41,7 @@ Public API
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from datetime import datetime, timezone
 
@@ -56,44 +57,66 @@ from app.memory.repository import Repository
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Constraint text generation (deterministic)
+# Constraint text generation and signature computation (deterministic)
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _build_constraint_text(failed_tests: list[PerTestResult]) -> str:
+def compute_constraint_signature(
+    candidate: CandidatePatch,
+    result: TestResult,
+    failed_tests: list[PerTestResult],
+) -> str:
     """
-    Build a concise, actionable constraint message from the list of
-    failing ``PerTestResult`` objects.
-
-    Rules
-    -----
-    * Each failed test contributes one line.
-    * The test name and truncated error message are included.
-    * The total output is capped at 2 048 characters.
-
-    Parameters
-    ----------
-    failed_tests:
-        Non-empty list of ``PerTestResult`` with ``status in {"failed","error"}``.
-
-    Returns
-    -------
-    str
-        Multi-line constraint text ready for injection into a prompt.
+    Compute a stable signature over (sorted failing test names + normalized source hash).
+    Only candidates with the EXACT same code failing the same tests are deduplicated.
     """
+    norm_source = "\n".join(line.rstrip() for line in candidate.source_code.strip().splitlines())
+    source_hash = hashlib.sha256(norm_source.encode("utf-8")).hexdigest()[:16]
+
+    if result.status == ExecutionStatus.TIMED_OUT:
+        test_key = "TIMEOUT"
+    elif failed_tests:
+        sorted_names = sorted(pt.test_name for pt in failed_tests)
+        test_key = ",".join(sorted_names)
+    elif result.failure_signature:
+        test_key = result.failure_signature
+    else:
+        test_key = "FAILED"
+
+    return hashlib.sha256(f"{test_key}::{source_hash}".encode("utf-8")).hexdigest()[:16]
+
+
+def _build_constraint_text(
+    candidate: CandidatePatch,
+    result: TestResult,
+    failed_tests: list[PerTestResult],
+) -> str:
+    """
+    Build a concise, actionable constraint message containing the round, agent,
+    failing tests with error messages, and the rejected code snippet.
+    """
+    agent_label = candidate.agent or "Agent"
     lines: list[str] = [
-        f"The following {len(failed_tests)} test(s) failed in the previous "
-        "repair attempt. The next candidate MUST address these failures:"
+        f"Round {candidate.round_number} attempt by {agent_label} failed:",
     ]
-    for pt in failed_tests[:10]:  # cap at 10 individual tests
-        msg = pt.message.strip()
-        if msg:
-            lines.append(f"  • {pt.test_name}: {msg[:256]}")
-        else:
-            lines.append(f"  • {pt.test_name}: (no message captured)")
+    if result.status == ExecutionStatus.TIMED_OUT:
+        duration_s = f"{result.duration_ms / 1000.0:.1f}s" if result.duration_ms else "configured limit"
+        lines.append(
+            f"  • Execution timed out (exceeded {duration_s}); candidate exceeded execution timeout; "
+            "avoid unbounded loops or infinite recursion."
+        )
+    else:
+        lines.append(f"  • The following test(s) failed:")
+        for pt in failed_tests[:3]:
+            msg = pt.message.strip()[:300] if pt.message else "(no message captured)"
+            lines.append(f"    - {pt.test_name}: {msg}")
 
-    text = "\n".join(lines)
-    return text[:2048]
+    code_lines = candidate.source_code.splitlines()[:40]
+    code_snippet = "\n".join(code_lines)[:1500]
+    lines.append("Do NOT repeat this failed implementation:")
+    lines.append(f"```python\n{code_snippet}\n```")
+
+    return "\n".join(lines)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -122,61 +145,24 @@ class ConstraintLedger:
         result: TestResult,
     ) -> Constraint | None:
         """
-        Analyse *result* and create a constraint if the evidence warrants one.
-
-        Decision table
-        --------------
-        +-----------------------+--------------------+
-        | result.status         | action             |
-        +=======================+====================+
-        | PASSED                | return None        |
-        | TIMED_OUT             | return None        |
-        | INFRASTRUCTURE_ERROR  | return None        |
-        | FAILED (no test data) | return None        |
-        | FAILED (with evidence)| create constraint  |
-        +-----------------------+--------------------+
-
-        Deduplication
-        -------------
-        If a constraint with the same ``failure_signature`` already exists
-        for the same session, no duplicate is created and ``None`` is
-        returned.
-
-        Parameters
-        ----------
-        candidate:
-            The ``CandidatePatch`` whose execution produced *result*.
-        result:
-            The ``TestResult`` from the evaluator.
-
-        Returns
-        -------
-        Constraint | None
-            The newly created constraint, or ``None`` if no constraint
-            was warranted.
+        Analyse *result* and create a constraint for FAILED and TIMED_OUT results.
+        Deduplicates only when identical code produces identical failure signatures.
         """
-        # Only genuine test failures generate constraints
-        if result.status != ExecutionStatus.FAILED:
+        # Genuine test failures and timeouts generate constraints
+        if result.status not in (ExecutionStatus.FAILED, ExecutionStatus.TIMED_OUT):
             return None
 
-        # Need per-test evidence to build a useful constraint
         failed_tests = [
             pt for pt in result.per_test_results if pt.status in {"failed", "error"}
         ]
-        if not failed_tests:
-            # FAILED status but no per-test data — insufficient evidence
-            return None
 
-        sig = result.failure_signature
-        if not sig:
-            # Cannot deduplicate without a signature — skip
-            return None
+        sig = compute_constraint_signature(candidate, result, failed_tests)
 
-        # Deduplication: skip if already recorded for this session
+        # Deduplication: skip if identical constraint already recorded for this session
         if self._repo.constraint_exists(candidate.session_id, sig):
             return None
 
-        constraint_text = _build_constraint_text(failed_tests)
+        constraint_text = _build_constraint_text(candidate, result, failed_tests)
 
         constraint = Constraint(
             constraint_id=str(uuid.uuid4()),
@@ -201,43 +187,13 @@ class ConstraintLedger:
     ) -> list[Constraint]:
         """
         Return the most recent active constraints for *session_id*.
-
-        This list is formatted by Member 1 and injected into the next
-        agent repair prompt.
-
-        Parameters
-        ----------
-        session_id:
-            The session whose constraints should be retrieved.
-        limit:
-            Maximum number of constraints to return (default 10).
-
-        Returns
-        -------
-        list[Constraint]
-            Active constraints, newest first, capped at *limit*.
         """
         return self._repo.list_constraints(session_id, limit=limit)
 
     def format_for_prompt(self, session_id: str, limit: int = 10) -> str:
         """
-        Convenience method for Member 1: return a formatted string of
-        constraints ready for injection into an agent prompt.
-
-        If there are no constraints, returns an empty string so the
-        caller does not need to special-case ``None``.
-
-        Parameters
-        ----------
-        session_id:
-            The session whose constraints should be included.
-        limit:
-            Maximum number of constraints to include.
-
-        Returns
-        -------
-        str
-            Formatted constraint block, or ``""`` if none exist.
+        Convenience method: return a formatted string of constraints
+        ready for injection into an agent prompt, capped at ~6000 chars.
         """
         constraints = self.get_relevant_constraints(session_id, limit=limit)
         if not constraints:
@@ -249,7 +205,10 @@ class ConstraintLedger:
                 f"\n[Constraint {i} — Round {c.round_number}, "
                 f"sig={c.failure_signature}]\n{c.constraint_text}"
             )
-        return "\n".join(parts)
+        text = "\n".join(parts)
+        if len(text) > 6000:
+            return text[:6000] + "\n... [Remaining constraints truncated for context window]"
+        return text
 
     def get_active_constraints(self, session_id: str, limit: int = 10) -> list[Constraint]:
         """Alias for get_relevant_constraints to satisfy IConstraintLedger protocol."""
@@ -258,3 +217,4 @@ class ConstraintLedger:
     def record_constraint(self, constraint: Constraint) -> None:
         """Directly persists a constraint record to satisfy IConstraintLedger protocol."""
         self._repo.save_constraint(constraint)
+

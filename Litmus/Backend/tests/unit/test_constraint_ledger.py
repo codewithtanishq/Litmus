@@ -59,13 +59,18 @@ def _make_session(repo: Repository, sid: str) -> DebugSession:
     return s
 
 
-def _make_candidate(repo: Repository, session_id: str, round_number: int = 1) -> CandidatePatch:
+def _make_candidate(
+    repo: Repository,
+    session_id: str,
+    round_number: int = 1,
+    source_code: str = "def f(): return 1",
+) -> CandidatePatch:
     c = CandidatePatch(
         candidate_id=_uid(),
         session_id=session_id,
         agent="agent_alpha",
         round_number=round_number,
-        source_code="def f(): return 1",
+        source_code=source_code,
         explanation="Fix",
     )
     repo.save_candidate(c)
@@ -130,7 +135,8 @@ class TestGenuineTestFailure:
         assert constraint.session_id == session_id
         assert constraint.source_candidate_id == c.candidate_id
         assert constraint.evidence_result_id == r.result_id
-        assert constraint.failure_signature == "abc123"
+        assert constraint.failure_signature is not None
+        assert len(constraint.failure_signature) == 16
         assert "test_empty" in constraint.constraint_text
         assert "IndexError" in constraint.constraint_text
 
@@ -145,18 +151,19 @@ class TestGenuineTestFailure:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Scenario 3 — Timeout does NOT create a constraint
+# Scenario 3 — Timeout DOES create a constraint (Bug Fix #7)
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 class TestTimeout:
-    def test_no_constraint_for_timeout(self, repo, ledger, session_id):
+    def test_timeout_creates_constraint(self, repo, ledger, session_id):
         _make_session(repo, session_id)
         c = _make_candidate(repo, session_id)
         r = _make_result(repo, session_id, c.candidate_id, ExecutionStatus.TIMED_OUT)
         constraint = ledger.record_failure(c, r)
-        assert constraint is None
-        assert repo.list_constraints(session_id) == []
+        assert constraint is not None
+        assert "timed out" in constraint.constraint_text.lower()
+        assert len(repo.list_constraints(session_id)) == 1
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -234,7 +241,7 @@ class TestSessionSpecificRetrieval:
     def test_limit_is_respected(self, repo, ledger, session_id):
         _make_session(repo, session_id)
         for i in range(8):
-            c = _make_candidate(repo, session_id, round_number=i + 1)
+            c = _make_candidate(repo, session_id, round_number=i + 1, source_code=f"def f(): return {i}")
             r = _make_result(repo, session_id, c.candidate_id, ExecutionStatus.FAILED,
                              per_test=_failed_per_test(), sig=f"sig{i:04d}")
             ledger.record_failure(c, r)
