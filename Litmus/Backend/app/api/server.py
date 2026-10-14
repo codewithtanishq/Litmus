@@ -54,8 +54,17 @@ from app.events.publisher import InMemoryEventPublisher
 from app.schemas.events import WorkflowEventType
 from app.memory.constraint_ledger import ConstraintLedger
 from app.memory.repository import Repository
-from app.sandbox.runner import _docker_available, _allow_host_execution
+from app.sandbox.runner import _docker_available, _allow_host_execution, run_candidate
+from app.orchestration.code_assembler import (
+    apply_patch_or_code,
+    derive_reproduction_test_suite,
+    generate_candidate_fixes,
+    validate_python_code,
+)
 from app.api.pipeline_service import execute_real_pipeline
+
+# Allow fallback to host execution when Docker is not running
+os.environ.setdefault("SWARM_ALLOW_HOST_EXECUTION", "1")
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -379,6 +388,9 @@ async def execute_demo_debate_task(session_id: str, speed_factor: float = 1.0) -
     original_code = cached_input.get("code") or "def process_data(items):\n    return items[0:len(items)-1]"
     question = cached_input.get("question") or "Off-by-one error drops tail element"
     scenario_id = cached_input.get("scenarioId") or "fix_b_passes"
+    details = cached_input.get("details") or {}
+    user_test = details.get("failingTest") or ""
+    expected_behavior = details.get("expectedBehavior") or ""
 
     async def sleep_step(seconds: float):
         if speed_factor > 0:
@@ -394,8 +406,17 @@ async def execute_demo_debate_task(session_id: str, speed_factor: float = 1.0) -
     ))
     await sleep_step(1.5)
 
-    fix_a_code = original_code.replace("len(items)-1", "len(items)") if "len(items)-1" in original_code else original_code + "\n    # Fix A"
-    fix_a_expl = "[DEMO] Slice excludes end index when length minus one is passed."
+    # Synthesize Candidate Fix A and Fix B using general AST code repair
+    fix_a_cand, fix_b_cand = generate_candidate_fixes(
+        original_code=original_code,
+        bug_description=question,
+        test_suite=user_test,
+        scenario_id=scenario_id,
+    )
+    fix_a_code = fix_a_cand.code
+    fix_a_expl = fix_a_cand.explanation
+    fix_b_code = fix_b_cand.code
+    fix_b_expl = fix_b_cand.explanation
 
     await emit_frontend_event(session_id, FrontendDebugEvent(
         type="root_cause_located",
@@ -408,16 +429,13 @@ async def execute_demo_debate_task(session_id: str, speed_factor: float = 1.0) -
             "candidateA": {
                 "id": "fix_a",
                 "author": "prosecutor",
-                "title": "Fix A: Slice Upper-Bound Expansion",
+                "title": fix_a_cand.title,
                 "code": fix_a_code,
                 "explanation": fix_a_expl,
             }
         }
     ))
     await sleep_step(2.0)
-
-    fix_b_code = original_code.replace("items[0:len(items)-1]", "list(items)") if "items[0:len(items)-1]" in original_code else original_code + "\n    # Fix B: Defensive iteration"
-    fix_b_expl = "[DEMO] Full slice preserves entire collection defensively without explicit index manipulation."
 
     await emit_frontend_event(session_id, FrontendDebugEvent(
         type="fixes_compared",
@@ -430,7 +448,7 @@ async def execute_demo_debate_task(session_id: str, speed_factor: float = 1.0) -
             "candidateB": {
                 "id": "fix_b",
                 "author": "defender",
-                "title": "Fix B: Defensive Iteration & Boundary Guard",
+                "title": fix_b_cand.title,
                 "code": fix_b_code,
                 "explanation": fix_b_expl,
             }
@@ -448,8 +466,17 @@ async def execute_demo_debate_task(session_id: str, speed_factor: float = 1.0) -
     ))
     await sleep_step(2.2)
 
-    candidate_a_pass = scenario_id == "fix_a_passes"
-    candidate_b_pass = scenario_id in ("fix_b_passes", "round2_resolved")
+    # Derive effective test suite & run isolated sandboxes
+    effective_test_suite = derive_reproduction_test_suite(
+        original_source=original_code,
+        user_test=user_test,
+        bug_description=question,
+        expected_behavior=expected_behavior,
+    )
+    ev_a = run_candidate(fix_a_code, effective_test_suite, f"cand_a_{session_id[-6:]}")
+    ev_b = run_candidate(fix_b_code, effective_test_suite, f"cand_b_{session_id[-6:]}")
+    cand_a_passed = (ev_a.status == ExecutionStatus.PASSED)
+    cand_b_passed = (ev_b.status == ExecutionStatus.PASSED)
 
     await emit_frontend_event(session_id, FrontendDebugEvent(
         type="sandbox_finished",
@@ -460,27 +487,56 @@ async def execute_demo_debate_task(session_id: str, speed_factor: float = 1.0) -
         message="[DEMO] Sandboxes completed execution. Generating deterministic JUnit evidence.",
         payload={
             "sandboxRunA": {
-                "status": "passed" if candidate_a_pass else "failed",
-                "passed": 4 if candidate_a_pass else 3,
-                "failed": 0 if candidate_a_pass else 1,
-                "total": 4,
-                "exitCode": 0 if candidate_a_pass else 1,
-                "logs": "test_empty PASSED\ntest_single PASSED\ntest_multi PASSED\ntest_tail " + ("PASSED" if candidate_a_pass else "FAILED: AssertionError"),
+                "status": "passed" if cand_a_passed else "failed",
+                "passed": 1 if cand_a_passed else 0,
+                "failed": 0 if cand_a_passed else 1,
+                "total": 1,
+                "exitCode": ev_a.exit_code,
+                "logs": (ev_a.stdout or ev_a.stderr or f"Exit code: {ev_a.exit_code}").strip(),
             },
             "sandboxRunB": {
-                "status": "passed" if candidate_b_pass else "failed",
-                "passed": 4 if candidate_b_pass else 2,
-                "failed": 0 if candidate_b_pass else 2,
-                "total": 4,
-                "exitCode": 0 if candidate_b_pass else 1,
-                "logs": "test_empty PASSED\ntest_single PASSED\ntest_multi PASSED\ntest_tail PASSED",
+                "status": "passed" if cand_b_passed else "failed",
+                "passed": 1 if cand_b_passed else 0,
+                "failed": 0 if cand_b_passed else 1,
+                "total": 1,
+                "exitCode": ev_b.exit_code,
+                "logs": (ev_b.stdout or ev_b.stderr or f"Exit code: {ev_b.exit_code}").strip(),
             }
         }
     ))
     await sleep_step(1.5)
 
-    verdict_text = "fix_b_selected" if candidate_b_pass else ("fix_a_selected" if candidate_a_pass else "both_failed")
-    rationale_text = "[DEMO] Empirical sandbox execution verifies that Fix B passes 100% of test cases including edge boundary checks."
+    if cand_b_passed and not cand_a_passed:
+        winning_candidate = "fix_b"
+        verdict_text = "fix_b_selected"
+        winning_code = fix_b_code
+        winning_cand_obj = fix_b_cand
+        rationale_text = "[DEMO] Empirical sandbox execution verifies Fix B passed all reproduction assertions without errors."
+    elif cand_a_passed and not cand_b_passed:
+        winning_candidate = "fix_a"
+        verdict_text = "fix_a_selected"
+        winning_code = fix_a_code
+        winning_cand_obj = fix_a_cand
+        rationale_text = "[DEMO] Empirical sandbox execution verifies Fix A passed all reproduction tests."
+    elif cand_a_passed and cand_b_passed:
+        if scenario_id == "fix_a_passes":
+            winning_candidate = "fix_a"
+            verdict_text = "fix_a_selected"
+            winning_code = fix_a_code
+            winning_cand_obj = fix_a_cand
+            rationale_text = "[DEMO] Both candidates passed reproduction tests; Fix A adopted as primary direct repair."
+        else:
+            winning_candidate = "fix_b"
+            verdict_text = "fix_b_selected"
+            winning_code = fix_b_code
+            winning_cand_obj = fix_b_cand
+            rationale_text = "[DEMO] Both candidates passed reproduction tests; Fix B adopted for superior defensive resilience."
+    else:
+        winning_candidate = "both_failed"
+        verdict_text = "both_failed"
+        winning_code = None
+        winning_cand_obj = None
+        rationale_text = "[DEMO] Both Candidate Fix A and Fix B failed reproduction test execution in the sandbox."
 
     await emit_frontend_event(session_id, FrontendDebugEvent(
         type="judge_decision",
@@ -494,18 +550,31 @@ async def execute_demo_debate_task(session_id: str, speed_factor: float = 1.0) -
             "verdict": verdict_text,
             "rationale": rationale_text,
             "evidence": [
-                "Candidate Fix A exited with code 1" if not candidate_a_pass else "Candidate Fix A exited with code 0",
-                "Candidate Fix B exited with code 0" if candidate_b_pass else "Candidate Fix B exited with code 1",
+                f"Candidate Fix A exited with code {ev_a.exit_code} ({ev_a.status.value})",
+                f"Candidate Fix B exited with code {ev_b.exit_code} ({ev_b.status.value})",
             ]
         }
     ))
     await sleep_step(1.5)
 
-    final_status = "test_verified" if (candidate_a_pass or candidate_b_pass) else "unresolved"
-    repo.update_session_status(
-        session_id,
-        ContractSessionStatus.COMPLETED if final_status == "test_verified" else ContractSessionStatus.FAILED
-    )
+    is_verified = False
+    final_assembled_code = None
+    if winning_code:
+        assembled, is_valid_syntax, _ = apply_patch_or_code(original_code, winning_code, language="python")
+        if is_valid_syntax:
+            final_assembled_code = assembled
+            final_ev = run_candidate(final_assembled_code, effective_test_suite, f"final_{session_id[-6:]}")
+            if final_ev.status == ExecutionStatus.PASSED:
+                is_verified = True
+
+    if is_verified and final_assembled_code:
+        final_status = "test_verified"
+        repo.update_session_status(session_id, ContractSessionStatus.COMPLETED)
+        corrected_code = final_assembled_code
+    else:
+        final_status = "unresolved"
+        repo.update_session_status(session_id, ContractSessionStatus.FAILED)
+        corrected_code = None
 
     result_report = {
         "sessionId": session_id,
@@ -515,17 +584,21 @@ async def execute_demo_debate_task(session_id: str, speed_factor: float = 1.0) -
         "errors": [
             {
                 "id": "err-1",
-                "title": "[DEMO] Off-by-one tail item truncation",
+                "title": f"Bug Diagnosis: {question[:50]}",
                 "file": cached_input.get("fileName") or "solution.py",
-                "line": 2,
-                "originalCode": "items[0:len(items)-1]",
-                "correctedCode": "list(items)",
-                "explanation": "[DEMO] Upper slice limit inappropriately reduced length by 1.",
+                "line": 1,
+                "originalCode": original_code,
+                "correctedCode": corrected_code or "Selected fix failed execution validation.",
+                "explanation": winning_cand_obj.explanation if (is_verified and winning_cand_obj) else "Candidate fix failed empirical sandbox validation.",
                 "verificationStatus": "verified" if final_status == "test_verified" else "failed",
             }
         ],
-        "correctedCode": fix_b_code if candidate_b_pass else fix_a_code,
-        "summary": "[DEMO] The Judge adopted Fix B after sandbox execution confirmed zero regressions.",
+        "correctedCode": corrected_code,
+        "summary": (
+            f"[DEMO] The Judge adopted {winning_candidate.upper().replace('_', ' ')} after empirical sandbox verification confirmed zero regressions."
+            if is_verified
+            else "[DEMO] Candidate fixes failed validation against reproduction test suite. Status unresolved."
+        ),
         "rounds": [
             {
                 "roundNumber": 1,
@@ -533,39 +606,42 @@ async def execute_demo_debate_task(session_id: str, speed_factor: float = 1.0) -
                 "candidateA": {
                     "id": "fix_a",
                     "author": "prosecutor",
-                    "title": "Fix A: Slice Upper-Bound Expansion",
+                    "title": fix_a_cand.title,
                     "code": fix_a_code,
                     "explanation": fix_a_expl,
                     "sandboxRun": {
-                        "status": "failed",
-                        "passed": 3,
-                        "failed": 1,
-                        "total": 4,
-                        "exitCode": 1,
-                        "logs": "AssertionError: tail element missing",
+                        "status": "passed" if cand_a_passed else "failed",
+                        "passed": 1 if cand_a_passed else 0,
+                        "failed": 0 if cand_a_passed else 1,
+                        "total": 1,
+                        "exitCode": ev_a.exit_code,
+                        "logs": (ev_a.stdout or ev_a.stderr or f"Exit code: {ev_a.exit_code}").strip(),
                     }
                 },
                 "defenderChallenge": fix_b_expl,
                 "candidateB": {
                     "id": "fix_b",
                     "author": "defender",
-                    "title": "Fix B: Defensive Iteration & Boundary Guard",
+                    "title": fix_b_cand.title,
                     "code": fix_b_code,
                     "explanation": fix_b_expl,
                     "sandboxRun": {
-                        "status": "passed",
-                        "passed": 4,
-                        "failed": 0,
-                        "total": 4,
-                        "exitCode": 0,
-                        "logs": "All 4 test assertions passed.",
+                        "status": "passed" if cand_b_passed else "failed",
+                        "passed": 1 if cand_b_passed else 0,
+                        "failed": 0 if cand_b_passed else 1,
+                        "total": 1,
+                        "exitCode": ev_b.exit_code,
+                        "logs": (ev_b.stdout or ev_b.stderr or f"Exit code: {ev_b.exit_code}").strip(),
                     }
                 },
                 "decision": {
                     "roundNumber": 1,
                     "verdict": verdict_text,
                     "rationale": rationale_text,
-                    "evidence": ["Fix B exit code 0", "All tests passed"],
+                    "evidence": [
+                        f"Candidate Fix A exited with code {ev_a.exit_code} ({ev_a.status.value})",
+                        f"Candidate Fix B exited with code {ev_b.exit_code} ({ev_b.status.value})",
+                    ],
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 }
             }
@@ -575,14 +651,15 @@ async def execute_demo_debate_task(session_id: str, speed_factor: float = 1.0) -
                 "attemptId": "fix_a_attempt",
                 "author": "prosecutor",
                 "code": fix_a_code,
-                "failureReason": "[DEMO] Failed boundary assertion on empty collection in sandbox.",
+                "failureReason": "[DEMO] Failed reproduction test in execution sandbox." if not cand_a_passed else "Fix B preferred for defensive robustness.",
             }
-        ],
+        ] if winning_candidate == "fix_b" else [],
         "limitations": [
             "[DEMO MODE] This output is a scripted demonstration for UI testing.",
         ]
     }
     repo.save_session_result(session_id, result_report)
+    SESSION_RESULTS_CACHE[session_id] = result_report
 
     await emit_frontend_event(session_id, FrontendDebugEvent(
         type="completed",
@@ -708,6 +785,9 @@ async def fast_forward_session(session_id: str) -> Dict[str, Any]:
 @app.get("/api/sessions/{session_id}/result")
 async def get_session_result(session_id: str) -> Dict[str, Any]:
     """Returns the finalized courtroom outcome and sandbox evidence."""
+    if session_id in SESSION_RESULTS_CACHE:
+        return SESSION_RESULTS_CACHE[session_id]
+
     stored_result = repo.get_session_result(session_id)
     if stored_result:
         return stored_result

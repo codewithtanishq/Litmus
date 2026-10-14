@@ -223,38 +223,38 @@ export default function CourtroomArena({ session, onSelectResult }) {
           </div>
         </div>
 
-        {/* Stepper Progress bar */}
-        <div className="mt-6 pt-5 border-t border-[#E1DDFA]">
-          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+        {/* Stepper Progress Timeline: Spots Only */}
+        <div className="mt-5 pt-4 border-t border-[#E1DDFA]">
+          <div className="flex items-center justify-between max-w-sm mx-auto px-4 py-2">
             {stageSteps.map((step, idx) => {
-              const StepIcon = step.icon;
               const isPast = idx < activeStageIdx || currentStage === 'completed';
               const isCurrent = idx === activeStageIdx && currentStage !== 'completed';
+              const isLast = idx === stageSteps.length - 1;
 
               return (
-                <div
-                  key={step.key}
-                  className={`p-2.5 rounded-xl border transition-all ${
-                    isCurrent
-                      ? 'bg-[#EEEBFF] border-[#5F4DCB] shadow-sm'
-                      : isPast
-                      ? 'bg-white border-[#E1DDFA] text-[#1E1856]'
-                      : 'bg-[#F6F5FF]/50 border-transparent text-[#6B6894]/60'
-                  }`}
-                >
-                  <div className="flex items-center space-x-2">
-                    <div className={`w-5 h-5 rounded-full flex items-center justify-center text-xs ${
-                      isPast 
-                        ? 'bg-[#EDF7F2] text-[#2E7D5B]' 
-                        : isCurrent 
-                        ? 'bg-[#5F4DCB] text-white' 
-                        : 'bg-[#E1DDFA] text-[#6B6894]'
-                    }`}>
-                      {isPast ? <CheckCircle2 className="w-3.5 h-3.5" /> : idx + 1}
-                    </div>
-                    <span className="text-xs font-medium truncate">{step.label}</span>
-                  </div>
-                </div>
+                <React.Fragment key={step.key}>
+                  {/* Spot */}
+                  <div
+                    title={step.label}
+                    className={`rounded-full transition-all duration-300 shrink-0 ${
+                      isCurrent
+                        ? 'w-3.5 h-3.5 bg-[#5F4DCB] ring-4 ring-[#5F4DCB]/25 scale-110 shadow-sm'
+                        : isPast
+                        ? 'w-2.5 h-2.5 bg-[#5F4DCB]'
+                        : 'w-2.5 h-2.5 bg-[#E1DDFA]'
+                    }`}
+                  />
+                  {/* Connector line between spots */}
+                  {!isLast && (
+                    <div
+                      className={`flex-1 h-0.5 mx-2.5 transition-all duration-500 rounded-full ${
+                        idx < activeStageIdx || currentStage === 'completed'
+                          ? 'bg-[#5F4DCB]'
+                          : 'bg-[#E1DDFA]'
+                      }`}
+                    />
+                  )}
+                </React.Fragment>
               );
             })}
           </div>

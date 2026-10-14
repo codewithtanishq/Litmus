@@ -259,22 +259,6 @@ export default function NewSessionModal({ isOpen, onClose, onSessionCreated }) {
             />
           </div>
 
-          {/* Scenario & Demo options */}
-          <div className="p-3 rounded-xl bg-[#EEEBFF]/50 border border-[#E1DDFA] flex flex-wrap items-center justify-between gap-3 text-xs">
-            <div>
-              <span className="font-medium text-[#1E1856] block">Adjudication Sandbox Target</span>
-              <span className="text-[#6B6894] text-[11px]">Select simulated outcome for deterministic validation</span>
-            </div>
-            <select
-              value={scenarioId}
-              onChange={(e) => setScenarioId(e.target.value)}
-              className="bg-white border border-[#E1DDFA] rounded-lg px-2.5 py-1 text-xs text-[#1E1856] focus:outline-none"
-            >
-              <option value="fix_b_passes">Fix B Passes (Defender Wins)</option>
-              <option value="fix_a_passes">Fix A Passes (Prosecutor Wins)</option>
-              <option value="round2_resolved">Round 2 Multi-Round Resolution</option>
-            </select>
-          </div>
 
           {/* Footer controls */}
           <div className="pt-3 border-t border-[#E1DDFA] flex items-center justify-end space-x-3">
