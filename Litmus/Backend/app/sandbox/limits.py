@@ -37,7 +37,7 @@ def _env_int(key: str, default: int) -> int:
     raw = os.environ.get(key, "")
     if raw.strip():
         try:
-            return int(raw)
+            return int(float(raw))
         except ValueError as exc:
             raise ValueError(f"Environment variable {key}={raw!r} must be an integer.") from exc
     return default
@@ -82,8 +82,15 @@ def load_system_limits() -> RunLimits:
     pydantic.ValidationError
         If constructed values violate ``RunLimits`` field constraints.
     """
+    # Prefer SANDBOX_TIMEOUT_SECONDS, fall back to SWARM_SANDBOX_TIMEOUT_SECONDS
+    if os.environ.get("SANDBOX_TIMEOUT_SECONDS", "").strip():
+        timeout = _env_int("SANDBOX_TIMEOUT_SECONDS", 30)
+    elif os.environ.get("SWARM_SANDBOX_TIMEOUT_SECONDS", "").strip():
+        timeout = _env_int("SWARM_SANDBOX_TIMEOUT_SECONDS", 30)
+    else:
+        timeout = 30
     return RunLimits(
-        timeout_seconds=_env_int("SANDBOX_TIMEOUT_SECONDS", 30),
+        timeout_seconds=timeout,
         memory_mb=_env_int("SANDBOX_MEMORY_MB", 256),
         cpu_limit=_env_float("SANDBOX_CPU_LIMIT", 0.5),
         max_processes=_env_int("SANDBOX_MAX_PROCESSES", 32),
@@ -96,7 +103,7 @@ def load_system_limits() -> RunLimits:
 
 def get_docker_image() -> str:
     """Return the Docker image name to use for candidate execution."""
-    return os.environ.get("SANDBOX_DOCKER_IMAGE", "python:3.12-slim")
+    return os.environ.get("SANDBOX_DOCKER_IMAGE", "litmus-sandbox:latest")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

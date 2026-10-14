@@ -47,6 +47,7 @@ def evaluate_round_outcome(state: WorkflowState) -> RoutingDecision:
 
     any_passed = False
     all_failed = True
+    all_infra_error = bool(test_results)
 
     for patch_id, result in test_results.items():
         # Check explicit status and boolean passed
@@ -60,6 +61,9 @@ def evaluate_round_outcome(state: WorkflowState) -> RoutingDecision:
         # Ensure string comparison or enum value
         status_str = status.value if hasattr(status, "value") else str(status)
 
+        if status_str.lower() != "infrastructure_error":
+            all_infra_error = False
+
         # Compatible with both Member 1 schema (explicit passed bool)
         # and Member 2 contracts (ExecutionStatus.PASSED with no passed attribute)
         is_passed = (status_str.upper() == "PASSED") and (passed is True or passed is None)
@@ -71,6 +75,9 @@ def evaluate_round_outcome(state: WorkflowState) -> RoutingDecision:
 
     if any_passed:
         return RoutingDecision.FINISH_SUCCESS
+
+    if all_infra_error:
+        return RoutingDecision.TERMINATE_ERROR
 
     if all_failed:
         current_round = state.get("current_round", 1)
@@ -116,12 +123,11 @@ def route_after_intake(state: WorkflowState) -> str:
 def route_after_prosecutor(state: WorkflowState) -> str:
     """
     Conditional edge routing after prosecutor node.
-    If Prosecutor encountered an error or failed to generate Fix A, route to finalize_failure.
-    Never silently continue with a missing candidate patch.
+    If fatal errors exist in state, route to finalize_failure.
+    Otherwise, always route to defender so Defender has a chance to propose Fix B,
+    even if Prosecutor failed.
     """
-    has_errors = bool(state.get("errors"))
-    has_fix_a = bool(state.get("fix_a") or state.get("candidate_patches", {}).get("prosecutor"))
-    if has_errors or not has_fix_a:
+    if state.get("errors") and len(state.get("errors", [])) > 0:
         return "finalize_failure"
     return "defender"
 
@@ -129,11 +135,20 @@ def route_after_prosecutor(state: WorkflowState) -> str:
 def route_after_defender(state: WorkflowState) -> str:
     """
     Conditional edge routing after defender node.
-    If Defender encountered an error or failed to generate Fix B, route to finalize_failure.
-    Never silently continue with a missing candidate patch.
+    If fatal errors exist, route to finalize_failure.
+    If both Prosecutor and Defender failed to propose candidate patches, route to finalize_failure.
+    If at least one candidate patch is present, route to evaluation_boundary.
     """
-    has_errors = bool(state.get("errors"))
-    has_fix_b = bool(state.get("fix_b") or state.get("candidate_patches", {}).get("defender"))
-    if has_errors or not has_fix_b:
+    if state.get("errors") and len(state.get("errors", [])) > 0:
         return "finalize_failure"
+
+    has_fix_a = bool(state.get("fix_a") or state.get("candidate_patches", {}).get("prosecutor"))
+    has_fix_b = bool(state.get("fix_b") or state.get("candidate_patches", {}).get("defender"))
+
+    if not has_fix_a and not has_fix_b:
+        err_msg = "Both Prosecutor and Defender failed to propose candidate patches."
+        state.setdefault("errors", []).append(err_msg)
+        return "finalize_failure"
+
     return "evaluation_boundary"
+

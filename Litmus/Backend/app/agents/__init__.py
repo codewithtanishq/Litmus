@@ -9,6 +9,7 @@ Agents package for Swarm Debugger courtroom roles.
 from app.agents.prosecutor import ProsecutorAgent
 from app.agents.defender import DefenderAgent
 from app.agents.judge import JudgeAgent
+from app.agents.hybrid_client import HybridLLMClient
 from app.agents.ollama_client import (
     OllamaClient,
     OllamaError,
@@ -23,6 +24,7 @@ __all__ = [
     "ProsecutorAgent",
     "DefenderAgent",
     "JudgeAgent",
+    "HybridLLMClient",
     "OllamaClient",
     "OllamaError",
     "OllamaConnectionError",

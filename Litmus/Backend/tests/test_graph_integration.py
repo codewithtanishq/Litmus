@@ -95,15 +95,9 @@ class TestProsecutorNode:
         assert updated_state.get("fix_a") is None
         assert "prosecutor" not in updated_state.get("candidate_patches", {})
 
-        # Errors recorded honestly
-        assert updated_state["status"] == "failed"
-        assert any("Ollama offline" in err for err in updated_state["errors"])
+        # Errors recorded in agent_errors and limitations for graceful degradation
         assert updated_state["agent_errors"]["prosecutor"] == "Ollama offline"
-
-        # Event emitted
-        events = publisher.get_events(event_type=WorkflowEventType.SESSION_FAILED)
-        assert len(events) == 1
-        assert events[0].data["agent_role"] == "prosecutor"
+        assert any("Ollama offline" in lim for lim in updated_state.get("limitations", []))
 
 
 class TestDefenderNode:
@@ -137,8 +131,11 @@ class TestDefenderNode:
         assert updated_state["candidate_patches"]["defender"]["patch_id"] == "patch-fix-b"
         assert "Defender successfully proposed Fix B" in updated_state["audit_log"][-1]
 
-    def test_defender_node_aborts_when_fix_a_is_missing(self, sample_session: DebugSession):
+    def test_defender_node_proposes_standalone_when_fix_a_is_missing(
+        self, sample_session: DebugSession, mock_defender_patch: CandidatePatch
+    ):
         mock_defender = mock.MagicMock(spec=DefenderAgent)
+        mock_defender.critique_and_propose.return_value = mock_defender_patch
         publisher = InMemoryEventPublisher()
         workflow = CourtroomWorkflow(defender_agent=mock_defender, event_publisher=publisher)
 
@@ -146,11 +143,11 @@ class TestDefenderNode:
         state = create_initial_workflow_state(sample_session)
         updated_state = workflow.defender_node(state)
 
-        # Defender agent should not even be called
-        mock_defender.critique_and_propose.assert_not_called()
-        assert updated_state.get("fix_b") is None
-        assert updated_state["status"] == "failed"
-        assert any("Fix A is missing" in err for err in updated_state["errors"])
+        # Defender agent called with prosecutor_patch=None
+        mock_defender.critique_and_propose.assert_called_once()
+        call_kwargs = mock_defender.critique_and_propose.call_args[1]
+        assert call_kwargs["prosecutor_patch"] is None
+        assert updated_state.get("fix_b") is not None
 
     def test_defender_node_handles_agent_exception(
         self, sample_session: DebugSession, mock_prosecutor_patch: CandidatePatch
@@ -167,8 +164,8 @@ class TestDefenderNode:
         updated_state = workflow.defender_node(state)
 
         assert updated_state.get("fix_b") is None
-        assert updated_state["status"] == "failed"
-        assert any("Generation failed" in err for err in updated_state["errors"])
+        assert updated_state["agent_errors"]["defender"] == "Generation failed"
+        assert any("Generation failed" in lim for lim in updated_state.get("limitations", []))
 
 
 class TestLangGraphWorkflowIntegration:
@@ -217,7 +214,7 @@ class TestLangGraphWorkflowIntegration:
         assert any("Evaluation boundary reached" in log for log in final_state["audit_log"])
         assert final_state.get("test_results") == {}
 
-    def test_prosecutor_failure_stops_workflow_without_defender_or_evaluation(
+    def test_prosecutor_failure_allows_defender_to_continue(
         self, sample_session: DebugSession, mock_defender_patch: CandidatePatch
     ):
         mock_prosecutor = mock.MagicMock(spec=ProsecutorAgent)
@@ -237,18 +234,12 @@ class TestLangGraphWorkflowIntegration:
         initial_state = create_initial_workflow_state(sample_session)
         final_state = compiled_graph.invoke(initial_state)
 
-        # Workflow terminated with failure
-        assert final_state["status"] == "failed"
+        # Fix B was proposed despite Prosecutor failing
         assert final_state.get("fix_a") is None
-        assert final_state.get("fix_b") is None
+        assert final_state.get("fix_b") is not None
+        assert any("Evaluation boundary reached" in log for log in final_state.get("audit_log", []))
 
-        # Defender was never called
-        mock_defender.critique_and_propose.assert_not_called()
-
-        # Did NOT reach evaluation boundary
-        assert not any("Evaluation boundary reached" in log for log in final_state.get("audit_log", []))
-
-    def test_defender_failure_stops_workflow_at_finalize_failure(
+    def test_defender_failure_allows_fix_a_to_continue(
         self, sample_session: DebugSession, mock_prosecutor_patch: CandidatePatch
     ):
         mock_prosecutor = mock.MagicMock(spec=ProsecutorAgent)
@@ -268,12 +259,34 @@ class TestLangGraphWorkflowIntegration:
         initial_state = create_initial_workflow_state(sample_session)
         final_state = compiled_graph.invoke(initial_state)
 
-        # Fix A was proposed, but Defender failed
+        # Fix A was proposed, Defender failed, but workflow continued to evaluation boundary
         assert final_state["fix_a"] is not None
         assert final_state.get("fix_b") is None
-        assert final_state["status"] == "failed"
+        assert any("Evaluation boundary reached" in log for log in final_state.get("audit_log", []))
 
-        # Evaluation boundary NOT reached
+    def test_both_agents_failing_stops_workflow_at_finalize_failure(
+        self, sample_session: DebugSession
+    ):
+        mock_prosecutor = mock.MagicMock(spec=ProsecutorAgent)
+        mock_prosecutor.analyze_and_propose.side_effect = OllamaConnectionError("Ollama offline")
+
+        mock_defender = mock.MagicMock(spec=DefenderAgent)
+        mock_defender.critique_and_propose.side_effect = RuntimeError("Defender model timeout")
+
+        publisher = InMemoryEventPublisher()
+
+        compiled_graph = build_courtroom_workflow(
+            prosecutor_agent=mock_prosecutor,
+            defender_agent=mock_defender,
+            event_publisher=publisher,
+        )
+
+        initial_state = create_initial_workflow_state(sample_session)
+        final_state = compiled_graph.invoke(initial_state)
+
+        assert final_state.get("fix_a") is None
+        assert final_state.get("fix_b") is None
+        assert final_state["status"] == "failed"
         assert not any("Evaluation boundary reached" in log for log in final_state.get("audit_log", []))
 
     def test_missing_constraint_ledger_handled_safely(

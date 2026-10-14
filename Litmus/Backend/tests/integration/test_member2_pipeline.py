@@ -215,7 +215,8 @@ class TestTimeoutPipeline:
             mem_repo, ledger, TIMEOUT_SOURCE, TIMEOUT_TESTS, tight_limits
         )
         assert result.status == ExecutionStatus.TIMED_OUT
-        assert constraint is None  # timeout must NOT produce a constraint
+        assert constraint is not None  # Bug 7 fix: timeouts MUST produce a constraint
+        assert "exceeded" in constraint.constraint_text.lower() or "timeout" in constraint.constraint_text.lower()
 
 
 class TestConstraintDeduplication:

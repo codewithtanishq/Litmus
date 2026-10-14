@@ -46,8 +46,10 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -83,21 +85,31 @@ class SandboxUnavailableError(RuntimeError):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Docker availability probe (cached after first check)
+# Docker availability probe (cached for 60 seconds)
 # ─────────────────────────────────────────────────────────────────────────────
+
+_DOCKER_AVAILABLE_CACHE: tuple[float, bool] | None = None
 
 
 def _docker_available() -> bool:
-    """Return True if the Docker CLI is reachable and the daemon responds."""
+    """Return True if the Docker CLI is reachable and the daemon responds (cached for 60s)."""
+    global _DOCKER_AVAILABLE_CACHE
+    now = time.monotonic()
+    if _DOCKER_AVAILABLE_CACHE is not None:
+        cached_time, cached_val = _DOCKER_AVAILABLE_CACHE
+        if now - cached_time < 60.0:
+            return cached_val
     try:
         result = subprocess.run(
             ["docker", "info"],
             capture_output=True,
             timeout=10,
         )
-        return result.returncode == 0
+        val = result.returncode == 0
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-        return False
+        val = False
+    _DOCKER_AVAILABLE_CACHE = (now, val)
+    return val
 
 
 def _allow_host_execution() -> bool:
@@ -106,8 +118,41 @@ def _allow_host_execution() -> bool:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Workspace helpers
+# Test normalization & Workspace helpers
 # ─────────────────────────────────────────────────────────────────────────────
+
+
+def prepare_test_source(test_src: str) -> str:
+    """
+    Normalizes test source code for sandbox execution:
+    1. If there is no def test_ or class Test, wraps the statements in def test_reproduction(): (indented).
+    2. If the source has no from solution import or import solution line, prepends from solution import *  # auto-injected.
+    3. Keeps user's own imports unchanged.
+    """
+    cleaned = (test_src or "").strip()
+    if not cleaned:
+        return "from solution import *  # auto-injected\n\ndef test_reproduction():\n    pass\n"
+
+    lines = test_src.splitlines()
+    has_import = any(
+        re.match(r"^\s*(from\s+solution\s+import|import\s+solution\b)", line)
+        for line in lines
+    )
+    has_test_def = any(
+        re.match(r"^\s*(def\s+test_|class\s+Test)", line)
+        for line in lines
+    )
+
+    if not has_test_def:
+        indented = "\n".join("    " + line if line.strip() else "" for line in lines)
+        body = f"def test_reproduction():\n{indented}\n"
+    else:
+        body = test_src
+
+    if not has_import:
+        body = f"from solution import *  # auto-injected\n{body}"
+
+    return body
 
 
 def _write_workspace(
@@ -117,15 +162,16 @@ def _write_workspace(
     limits: RunLimits,
 ) -> None:
     """
-    Populate *workspace* with the candidate and trusted test files.
+    Populate *workspace* with the candidate and normalized trusted test files.
 
     Raises
     ------
     ValueError
         If source or test content exceeds configured size limits.
     """
-    source_bytes = source_code.encode()
-    test_bytes = trusted_tests.encode()
+    prepared_tests = prepare_test_source(trusted_tests)
+    source_bytes = source_code.encode("utf-8")
+    test_bytes = prepared_tests.encode("utf-8")
 
     if len(source_bytes) > limits.max_source_bytes:
         raise ValueError(
@@ -140,6 +186,13 @@ def _write_workspace(
 
     (workspace / _CANDIDATE_FILENAME).write_bytes(source_bytes)
     (workspace / _TESTS_FILENAME).write_bytes(test_bytes)
+
+    try:
+        workspace.chmod(0o777)
+        (workspace / _CANDIDATE_FILENAME).chmod(0o644)
+        (workspace / _TESTS_FILENAME).chmod(0o644)
+    except Exception:
+        pass
 
 
 def _truncate(data: bytes, max_bytes: int) -> str:
@@ -191,6 +244,7 @@ def _run_in_docker(
         f"--junitxml={container_workdir}/{_JUNIT_FILENAME}",
         "-q",
         "--no-header",
+        "-p", "no:cacheprovider",
     ]
 
     memory_limit = f"{limits.memory_mb}m"
@@ -209,10 +263,10 @@ def _run_in_docker(
         f"--cpu-quota={cpu_quota}",
         f"--pids-limit={limits.max_processes}",
         "--read-only",
-        "--tmpfs", f"{container_workdir}:exec,size=64m",
-        # Override tmpfs with actual workspace bind (workspace needs write)
+        "--tmpfs", "/tmp:rw,size=64m",
+        "-e", "HOME=/tmp",
+        "-e", "PYTHONDONTWRITEBYTECODE=1",
         "-v", candidate_mount,
-        # Mount test file read-only on top to protect it
         "--mount", f"type=bind,source={test_src},target={test_dest},readonly",
         "--workdir", container_workdir,
         image,
@@ -244,8 +298,16 @@ def _run_in_docker(
 
         if proc.returncode == 0:
             status = ExecutionStatus.PASSED
+            error_detail = ""
+        elif proc.returncode in (125, 126, 127):
+            status = ExecutionStatus.INFRASTRUCTURE_ERROR
+            error_detail = f"Docker infrastructure error (exit code {proc.returncode}): {stderr}"
+        elif proc.returncode == 137:
+            status = ExecutionStatus.FAILED
+            error_detail = "Execution killed (exit code 137), likely exceeded memory limit."
         else:
             status = ExecutionStatus.FAILED
+            error_detail = ""
 
         return ExecutionEvidence(
             candidate_id=candidate_id,
@@ -255,6 +317,7 @@ def _run_in_docker(
             stderr=stderr,
             duration_ms=duration_ms,
             junit_xml_content=junit_content,
+            error_detail=error_detail,
         )
 
     except subprocess.TimeoutExpired:
@@ -303,12 +366,13 @@ def _run_on_host(
     ⚠️  This function is only reachable when ``SWARM_ALLOW_HOST_EXECUTION=1``.
     """
     pytest_cmd = [
-        "python", "-m", "pytest",
+        sys.executable, "-m", "pytest",
         str(workspace / _TESTS_FILENAME),
         "--tb=short",
         f"--junitxml={workspace / _JUNIT_FILENAME}",
         "-q",
         "--no-header",
+        "-p", "no:cacheprovider",
     ]
 
     start = time.monotonic()

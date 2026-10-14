@@ -125,9 +125,10 @@ class ConsoleEventPublisher(BaseEventPublisher):
 
     def publish(self, event: WorkflowEvent) -> None:
         timestamp_str = event.timestamp.strftime("%H:%M:%S")
+        type_str = str(getattr(event.event_type, "value", event.event_type)).upper()
         print(
             f"[{timestamp_str}] [Round {event.round_number}] "
-            f"[{event.event_type.value.upper()}] session={event.session_id} data={event.data}"
+            f"[{type_str}] session={event.session_id} data={event.data}"
         )
         if self._fallback:
             self._fallback.publish(event)

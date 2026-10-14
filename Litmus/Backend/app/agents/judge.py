@@ -58,11 +58,13 @@ class JudgeAgent:
     def __init__(
         self,
         ollama_settings: Optional[OllamaSettings] = None,
-        ollama_client: Optional[OllamaClient] = None,
+        ollama_client: Optional[Any] = None,
         event_publisher: Optional[BaseEventPublisher] = None,
     ) -> None:
+        from app.agents.hybrid_client import HybridLLMClient
+
         self.settings = ollama_settings or get_settings().ollama
-        self.client = ollama_client or OllamaClient(settings=self.settings)
+        self.client = ollama_client or HybridLLMClient(ollama_settings=self.settings)
         self.publisher = event_publisher or get_event_publisher()
 
     def _format_test_result_summary(self, result: Any, label: str) -> str:
@@ -76,7 +78,14 @@ class JudgeAgent:
             stdout = result.get("stdout_excerpt") or result.get("stdout") or ""
             stderr = result.get("stderr_excerpt") or result.get("stderr") or ""
             per_tests = result.get("per_test_results") or result.get("test_cases") or []
-            duration = result.get("duration_ms") or (result.get("duration_seconds", 0) * 1000)
+            dur_ms = result.get("duration_ms")
+            dur_sec = result.get("duration_seconds")
+            if dur_ms is not None:
+                duration = float(dur_ms)
+            elif dur_sec is not None:
+                duration = float(dur_sec) * 1000.0
+            else:
+                duration = 0.0
             sig = result.get("failure_signature") or ""
         else:
             status = getattr(result, "status", "unknown")
@@ -84,7 +93,14 @@ class JudgeAgent:
             stdout = getattr(result, "stdout_excerpt", getattr(result, "stdout", ""))
             stderr = getattr(result, "stderr_excerpt", getattr(result, "stderr", ""))
             per_tests = getattr(result, "per_test_results", getattr(result, "test_cases", []))
-            duration = getattr(result, "duration_ms", 0.0)
+            dur_ms = getattr(result, "duration_ms", None)
+            dur_sec = getattr(result, "duration_seconds", None)
+            if dur_ms is not None:
+                duration = float(dur_ms)
+            elif dur_sec is not None:
+                duration = float(dur_sec) * 1000.0
+            else:
+                duration = 0.0
             sig = getattr(result, "failure_signature", "")
 
         status_str = status.value if hasattr(status, "value") else str(status)
@@ -103,7 +119,7 @@ class JudgeAgent:
             t_status_str = t_status.value if hasattr(t_status, "value") else str(t_status)
             line = f"    - {t_name}: {t_status_str.upper()}"
             if t_msg:
-                line += f" -> {t_msg[:150]}"
+                line += f" -> {t_msg[:500]}"
             test_lines.append(line)
 
         per_test_str = "\n".join(test_lines) if test_lines else "    (No individual test breakdown)"
@@ -115,8 +131,8 @@ class JudgeAgent:
             f"Execution Duration: {duration:.1f}ms\n"
             f"Failure Signature: {sig or 'None'}\n"
             f"Individual Test Outcomes:\n{per_test_str}\n"
-            f"Captured stdout excerpt:\n```\n{stdout[:300] or '(empty)'}\n```\n"
-            f"Captured stderr excerpt:\n```\n{stderr[:300] or '(empty)'}\n```"
+            f"Captured stdout excerpt:\n```\n{stdout[:1500] or '(empty)'}\n```\n"
+            f"Captured stderr excerpt:\n```\n{stderr[:1500] or '(empty)'}\n```"
         )
 
     def build_prompt(
@@ -138,10 +154,10 @@ class JudgeAgent:
         evidence_a = self._format_test_result_summary(res_a, "Fix A (Prosecutor)")
         evidence_b = self._format_test_result_summary(res_b, "Fix B (Defender)")
 
-        code_a = (prosecutor_patch.proposed_code if prosecutor_patch else "N/A")[:500]
-        code_b = (defender_patch.proposed_code if defender_patch else "N/A")[:500]
-        expl_a = (prosecutor_patch.explanation if prosecutor_patch else "N/A")[:300]
-        expl_b = (defender_patch.explanation if defender_patch else "N/A")[:300]
+        code_a = (prosecutor_patch.proposed_code if prosecutor_patch else "N/A")[:1500]
+        code_b = (defender_patch.proposed_code if defender_patch else "N/A")[:1500]
+        expl_a = (prosecutor_patch.explanation if prosecutor_patch else "N/A")[:600]
+        expl_b = (defender_patch.explanation if defender_patch else "N/A")[:600]
 
         return (
             f"=== COURTROOM CASE DELIBERATION (Round {session.current_round}) ===\n"
@@ -216,11 +232,11 @@ class JudgeAgent:
             data={"agent_role": "judge", "model": self.settings.model},
         )
 
-        prompt = self.build_prompt(session, prosecutor_patch, defender_patch, test_results)
         verdict = None
 
         # Attempt LLM synthesis
         try:
+            prompt = self.build_prompt(session, prosecutor_patch, defender_patch, test_results)
             raw_response = self.client.generate(
                 prompt=prompt,
                 system_instruction=JUDGE_SYSTEM_PROMPT,
